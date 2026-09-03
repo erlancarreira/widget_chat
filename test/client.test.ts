@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEvolutionClient, EvolutionApiError } from "../src/api/client";
+import { ChatError } from "../src/errors";
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 
@@ -110,5 +111,50 @@ describe("createEvolutionClient", () => {
     expect(apiError.status).toBe(401);
     expect(apiError.body).toBe("unauthorized");
     expect(apiError.message).toBe("Evolution sendText falhou (401)");
+  });
+
+  // Robustez (revisão Task 3): toda falha de HTTP/parse/shape é EvolutionApiError; nunca TypeError/SyntaxError cru.
+
+  it("sendText com 200 e corpo {} rejeita EvolutionApiError (não TypeError cru)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(ok({}));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    const error = await client.sendText("inst", "n", "t").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EvolutionApiError);
+    expect((error as Error).name).toBe("EvolutionApiError");
+  });
+
+  it("sendText com 200 e corpo não-JSON rejeita EvolutionApiError (não SyntaxError cru)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("<html>oops</html>", { status: 200 }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    const error = await client.sendText("inst", "n", "t").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EvolutionApiError);
+    expect((error as EvolutionApiError).body).toContain("oops");
+  });
+
+  it("getConnectionState com 200 e corpo {} rejeita EvolutionApiError", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(ok({}));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    const error = await client.getConnectionState("inst").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EvolutionApiError);
+    expect((error as Error).name).toBe("EvolutionApiError");
+  });
+
+  it("createGroup com 200 e corpo {} lança ChatError send_failed (nunca groupJid undefined)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(ok({}));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    const error = await client.createGroup("inst", "S", ["p"]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ChatError);
+    expect((error as ChatError).code).toBe("send_failed");
+  });
+
+  it("baseUrl com barras finais é normalizado (URL final com barra única)", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(ok({ key: { id: "MSG-1" } }))
+      .mockResolvedValueOnce(ok({ instance: { state: "open" } }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test///", apiKey: "k", fetchImpl });
+    expect((await client.sendText("inst", "n", "t")).waMessageId).toBe("MSG-1");
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe("https://evo.test/message/sendText/inst");
+    expect(await client.getConnectionState("i")).toBe("open");
+    expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe("https://evo.test/instance/connectionState/i");
   });
 });

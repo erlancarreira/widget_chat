@@ -1,4 +1,5 @@
 // src/api/client.ts — Adapter REST da Evolution API v2 (fetch injetável p/ testes).
+import { ChatError } from "../errors";
 
 export interface EvolutionFetch { (url: string, init: RequestInit): Promise<Response>; } // ponto de injeção (DI)
 
@@ -15,15 +16,31 @@ export interface EvolutionClient {
 }
 
 export class EvolutionApiError extends Error {
-  constructor(readonly status: number, readonly body: string, operation: string) { super(`Evolution ${operation} falhou (${status})`); }
+  constructor(readonly status: number, readonly body: string, operation: string) {
+    super(`Evolution ${operation} falhou (${status})`);
+    this.name = "EvolutionApiError";
+  }
+}
+
+interface JsonOk { operation: string; status: number; text: string; json: Record<string, unknown>; }
+
+// Lê path aninhado (ex.: "key", "id") sem lançar: devolve undefined se faltar ou não for objeto.
+function readPath(json: Record<string, unknown>, ...path: string[]): unknown {
+  let cur: unknown = json;
+  for (const key of path) {
+    if (!cur || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur;
 }
 
 export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fetchImpl?: EvolutionFetch }): EvolutionClient {
   const doFetch: EvolutionFetch = cfg.fetchImpl ?? fetch;
+  const base = cfg.baseUrl.replace(/\/+$/, ""); // normaliza p/ evitar double slash na concatenação
   const headers = { "content-type": "application/json", apikey: cfg.apiKey };
 
   async function request(operation: string, method: string, path: string, body?: unknown): Promise<Response> {
-    const response = await doFetch(`${cfg.baseUrl}${path}`, {
+    const response = await doFetch(`${base}${path}`, {
       method,
       headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -32,20 +49,40 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
     return response;
   }
 
-  async function requestJson<T>(operation: string, method: string, path: string, body?: unknown): Promise<T> {
-    return (await request(operation, method, path, body).then((response) => response.json())) as T;
+  // Contrato: toda falha de HTTP/parse/shape é EvolutionApiError (a ponte captura via instanceof).
+  async function requestJson(operation: string, method: string, path: string, body?: unknown): Promise<JsonOk> {
+    const response = await request(operation, method, path, body);
+    const text = await response.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new EvolutionApiError(response.status, text, operation);
+    }
+    if (!parsed || typeof parsed !== "object") throw new EvolutionApiError(response.status, text, operation);
+    return { operation, status: response.status, text, json: parsed as Record<string, unknown> };
+  }
+
+  function requireString(res: JsonOk, ...path: string[]): string {
+    const value = readPath(res.json, ...path);
+    if (typeof value !== "string" || value === "") throw new EvolutionApiError(res.status, res.text, res.operation);
+    return value;
   }
 
   return {
     async sendText(instance, number, text) {
-      const json = await requestJson<{ key: { id: string } }>("sendText", "POST", `/message/sendText/${instance}`, { number, text });
-      return { waMessageId: json.key.id };
+      const res = await requestJson("sendText", "POST", `/message/sendText/${instance}`, { number, text });
+      return { waMessageId: requireString(res, "key", "id") };
     },
 
     async createGroup(instance, subject, participants, description) {
       const payload = description === undefined ? { subject, participants } : { subject, participants, description };
-      const json = await requestJson<{ id?: string; group?: { id: string } }>("createGroup", "POST", `/group/create/${instance}`, payload);
-      return { groupJid: (json.group?.id ?? json.id) as string };
+      const res = await requestJson("createGroup", "POST", `/group/create/${instance}`, payload);
+      const groupJid = readPath(res.json, "group", "id") ?? res.json.id; // mesmo derivador de antes, sem cast
+      if (typeof groupJid !== "string" || groupJid === "") {
+        throw new ChatError("Evolution createGroup: groupJid ausente/inválido na resposta", "send_failed");
+      }
+      return { groupJid };
     },
 
     async leaveGroup(instance, groupJid) {
@@ -53,17 +90,21 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
     },
 
     async getConnectionState(instance) {
-      const json = await requestJson<{ instance: { state: "open" | "connecting" | "close" } }>(
-        "getConnectionState", "GET", `/instance/connectionState/${instance}`,
-      );
-      return json.instance.state;
+      const res = await requestJson("getConnectionState", "GET", `/instance/connectionState/${instance}`);
+      const state = readPath(res.json, "instance", "state");
+      if (state === "open" || state === "connecting" || state === "close") return state;
+      throw new EvolutionApiError(res.status, res.text, res.operation);
     },
 
     async connectQR(instance) {
-      const json = await requestJson<{ base64?: string | null; pairingCode?: string | null; code?: string | null }>(
-        "connectQR", "GET", `/instance/connect/${instance}`,
-      );
-      return { qrBase64: json.base64 ?? null, pairingCode: json.pairingCode ?? json.code ?? null };
+      const res = await requestJson("connectQR", "GET", `/instance/connect/${instance}`);
+      const base64 = readPath(res.json, "base64");
+      const pairingCode = readPath(res.json, "pairingCode");
+      const code = readPath(res.json, "code");
+      return {
+        qrBase64: typeof base64 === "string" ? base64 : null,
+        pairingCode: typeof pairingCode === "string" ? pairingCode : typeof code === "string" ? code : null,
+      };
     },
 
     async setWebhook(instance, url, events) {
