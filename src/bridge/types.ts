@@ -77,3 +77,21 @@ export type ChatLimiter = (
   limit: number,
   windowMs: number,
 ) => ChatLimiterResult | Promise<ChatLimiterResult>;
+
+/**
+ * Saída de ConversationRouter.decide — união discriminada por `action`: só o ramo
+ * "route" carrega sessão/direção/texto (obrigatórios), eliminando o risco de
+ * `decision.session` ser undefined em tempo de execução no consumidor (Task 6).
+ *
+ * Os `?: undefined` explícitos no 2º ramo preservam o typecheck de acessos sem
+ * narrowing (ex.: `d.session` → `ChatSession | undefined` em testes já escritos);
+ * após `if (d.action === "route")` os campos continuam obrigatórios.
+ */
+export type RouterDecision =
+  | { action: "route"; session: ChatSession; direction: ChatMessageDirection; text: string }
+  | {
+      action: "echo" | "unknown_session" | "not_text" | "ignore";
+      session?: undefined;
+      direction?: undefined;
+      text?: undefined;
+    };

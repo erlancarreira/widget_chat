@@ -11,15 +11,8 @@
 //   5. caso contrário                         → route, direction = fromMe ? owner : visitor
 
 import type { InboundMessage } from "../api/webhook-parser";
-import type { ChatMessageDirection, ChatSession } from "../types";
-import type { SessionStore } from "./types";
-
-export interface RouterDecision {
-  action: "route" | "echo" | "unknown_session" | "not_text" | "ignore";
-  session?: ChatSession;
-  direction?: ChatMessageDirection;
-  text?: string;
-}
+import type { ChatMessageDirection } from "../types";
+import type { RouterDecision, SessionStore } from "./types";
 
 /** Sufixo que identifica um Jid de grupo no WhatsApp. */
 const GROUP_JID_SUFFIX = "@g.us";
@@ -46,6 +39,6 @@ export class ConversationRouter {
     if (typeof msg.text !== "string" || msg.text.length === 0) return { action: "not_text" };
 
     const direction: ChatMessageDirection = msg.fromMe ? "owner" : "visitor";
-    return { action: "route", session, direction, text: msg.text };
+    return { action: "route", session, direction, text: msg.text ?? "" };
   }
 }
