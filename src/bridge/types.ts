@@ -38,6 +38,13 @@ export interface SessionStore {
   /** Atualiza o status de uma mensagem já persistida (pending → sent/failed). */
   updateMessageStatus(id: string, status: ChatMessageStatus): Promise<void>;
   listMessages(sessionId: string, afterIso?: string | null): Promise<ChatMessage[]>;
+  /**
+   * Busca uma mensagem já persistida pelo `waMessageId` dentro da sessão (`null` se não
+   * existir). Suporta a idempotência de reentrega do webhook: a Evolution reenvia a
+   * mesma mensagem quando devolvemos `handled:false`, e o bridge precisa reconhecer o
+   * duplicado em vez de anexar/publicar de novo.
+   */
+  findMessageByWaId(sessionId: string, waMessageId: string): Promise<ChatMessage | null>;
   /** Registra o waMessageId de uma mensagem enviada por ESTA instância (dedupe de eco). */
   registerSentMessageId(sessionId: string, waMessageId: string): Promise<void>;
   isEcho(sessionId: string, waMessageId: string): Promise<boolean>;

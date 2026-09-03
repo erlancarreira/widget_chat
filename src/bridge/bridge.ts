@@ -11,8 +11,9 @@
 //
 // Convenção de erros: toda falha esperada sai como ChatError com um código de domínio
 // (invalid_input / rate_limited / group_create_failed / send_failed / session_not_found /
-// session_closed), preservando o erro original em `cause`. As rotas (Task 8) mapeiam
-// esses códigos para status HTTP.
+// session_closed / store_error), preservando o erro original em `cause`. As rotas (Task 8)
+// mapeiam esses códigos para status HTTP — `invalid_input` vira 422 de campo (visível ao
+// visitante); falhas de infra/config usam `store_error` (500/502), nunca um 422 indevido.
 
 import { ChatError } from "../errors";
 import { generateRealtimeToken, generateSessionCode } from "../api/ids";
@@ -90,7 +91,9 @@ export class ChatBridge {
   /** Config injetada pelas rotas a cada request (setConfig → uso → getConfig). */
   getConfig(): ChatConfig {
     if (this.config === null) {
-      throw new ChatError("ChatBridge sem config: chame setConfig(cfg) antes de usar", "invalid_input");
+      // F3: config ausente é falha de infraestrutura, não entrada inválida do visitante.
+      // `invalid_input` seria mapeado pela Task 8 a um 422 de campo exibido a quem visita.
+      throw new ChatError("Chat não configurado", "store_error");
     }
     return this.config;
   }
@@ -134,7 +137,7 @@ export class ChatBridge {
     const participants = [...new Set([visitorJid, platformJid])];
     const subject = `${cfg.projectName} — ${name} (#${code})`;
 
-    const groupJid = await this.createGroupWithRetry(cfg.instance, subject, participants);
+    const groupJid = await this.createGroupWithRetry(cfg.instance, subject, participants, platformJid);
 
     const session = await store.createSession({
       code,
@@ -224,11 +227,20 @@ export class ChatBridge {
       if (decision.action !== "route") return { handled: false }; // echo / unknown_session / not_text / ignore
 
       const { session, direction, text } = decision;
+      const waMessageId = parsed.event.waMessageId;
+
+      // F2: idempotência de reentrega. A Evolution reenvia a mesma mensagem sempre que
+      // devolvemos handled:false (ex.: publish falhou). Sem esta guarda, o reenvio
+      // duplicaria append + publish. O isEcho do router continua cobrindo só o eco de
+      // mensagens NOSSAS (outbound); aqui é inbound repetido.
+      const existing = await this.deps.store.findMessageByWaId(session.id, waMessageId);
+      if (existing !== null) return { handled: true }; // já processada: só reconhece
+
       const message = await this.deps.store.appendMessage({
         sessionId: session.id,
         direction,
         body: text,
-        waMessageId: parsed.event.waMessageId,
+        waMessageId,
         status: "sent",
       });
       await this.deps.store.touchSession(session.id, now.toISOString());
@@ -252,17 +264,22 @@ export class ChatBridge {
   }
 
   /**
-   * createGroup com uma única retratação: um participante inválido (ex.: o próprio número
-   * da plataforma rejeitado pela Evolution) não pode abortar o atendimento — a instância
-   * criadora já é membro do grupo, então a segunda tentativa remove o último participante.
+   * createGroup com uma única retratação: um participante inválido (ex.: o número do
+   * visitante, vindo de um formulário web) não pode abortar o atendimento — a segunda
+   * tentativa cria o grupo só com a plataforma, o número que controlamos e é válido.
+   *
+   * Atenção (F1): createGroup NÃO é idempotente. Se a 1ª chamada criar o grupo e o erro
+   * observado for um timeout, a retratação pode orfanar um segundo grupo; a compensação
+   * (limpeza/reconciliação de órfãos) é preocupação das Tasks 7/8, não deste fix.
    */
   private async createGroupWithRetry(
     instance: string,
     subject: string,
     participants: string[],
+    platformJid: string,
   ): Promise<string> {
     const attempts: string[][] =
-      participants.length > 1 ? [participants, participants.slice(0, -1)] : [participants];
+      participants.length > 1 ? [participants, [platformJid]] : [participants];
     let lastError: unknown;
 
     for (const attempt of attempts) {

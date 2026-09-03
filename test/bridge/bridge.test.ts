@@ -157,9 +157,25 @@ describe("ChatBridge config", () => {
     const { client } = mockClient();
     const bare = new ChatBridge({ client, store, transport: { publish: async () => undefined } });
     expect(() => bare.getConfig()).toThrow(ChatError);
+    // F3: config ausente é falha de infraestrutura (store/config), não entrada do
+    // visitante — Task 8 mapeia store_error → 500/502, nunca um 422 de campo.
     await expect(captureError(bare.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" }))).resolves.toMatchObject({
-      code: "invalid_input",
+      code: "store_error",
     });
+  });
+
+  it("getConfig sem setConfig → ChatError com code store_error (não invalid_input)", () => {
+    const store = createMemoryStore();
+    const { client } = mockClient();
+    const bare = new ChatBridge({ client, store, transport: { publish: async () => undefined } });
+    let thrown: unknown;
+    try {
+      bare.getConfig();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ChatError);
+    expect((thrown as ChatError).code).toBe("store_error");
   });
 });
 
@@ -320,13 +336,11 @@ describe("ChatBridge.startChat", () => {
     expect(store.messages).toHaveLength(0);
   });
 
-  it("participante inválido não aborta: remove o da plataforma e tenta de novo uma vez", async () => {
-    let attempts = 0;
+  it("participante inválido (número do visitante) não aborta: retry só com a plataforma", async () => {
     const { bridge, store, createGroup } = setup({
       client: {
         createGroup: async (_instance, _subject, participants) => {
-          attempts += 1;
-          if (participants.includes(PLATFORM_JID)) {
+          if (participants.includes(VISITOR_JID)) {
             throw new EvolutionApiError(400, "participant invalid", "createGroup");
           }
           return { groupJid: GROUP_JID };
@@ -336,10 +350,11 @@ describe("ChatBridge.startChat", () => {
 
     const { session } = await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
 
-    expect(attempts).toBe(2);
+    // F1: o retry mantém o participante que controlamos (a plataforma) e descarta o do
+    // visitante — era o número dele, vindo do formulário, que a Evolution rejeitou.
     expect(createGroup).toHaveBeenCalledTimes(2);
     expect(createGroup.mock.calls[0]?.[2]).toEqual([VISITOR_JID, PLATFORM_JID]);
-    expect(createGroup.mock.calls[1]?.[2]).toEqual([VISITOR_JID]);
+    expect(createGroup.mock.calls[1]?.[2]).toEqual([PLATFORM_JID]);
     expect(session.groupJid).toBe(GROUP_JID);
     expect(store.sessions).toHaveLength(1);
   });
@@ -543,6 +558,20 @@ describe("ChatBridge.handleWebhook", () => {
     expect(result).toEqual({ handled: false });
     expect(store.messages).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("reentrega da mesma mensagem (webhook redelivered) → handled:true sem duplicar", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store);
+
+    const payload = upsertPayload({ id: "WA-IN-DUP", fromMe: true, text: "Sim, tem desconto" });
+    expect(await bridge.handleWebhook(payload)).toEqual({ handled: true });
+    // A Evolution reenvia quando o retorno anterior foi handled:false (ex.: publish caiu).
+    expect(await bridge.handleWebhook(payload)).toEqual({ handled: true });
+
+    const dup = store.messages.filter((m) => m.waMessageId === "WA-IN-DUP");
+    expect(dup).toHaveLength(1);
+    expect(publish).toHaveBeenCalledTimes(1); // segunda passada não republica
   });
 
   it("connection.update → handled:false (sem tocar no store)", async () => {

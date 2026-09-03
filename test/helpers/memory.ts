@@ -1,8 +1,9 @@
 // test/helpers/memory.ts — fake in-memory da porta SessionStore, compartilhado entre tasks.
 //
 // Fiél ao contrato: appendMessage gera id + createdAt e devolve o ChatMessage completo;
-// listMessages respeita o filtro `afterIso`; isEcho usa um Set alimentado por
-// registerSentMessageId; markStatus/updateMessageStatus mutam o que foi persistido.
+// listMessages respeita o filtro `afterIso`; findMessageByWaId varre `messages` por
+// (sessionId, waMessageId); isEcho usa um Set alimentado por registerSentMessageId;
+// markStatus/updateMessageStatus mutam o que foi persistido.
 //
 // `countRecentSessionsByIpHash` não tem como ser derivada dos dados (a porta não guarda
 // ipHash na sessão), então o fake expõe `recentByIpHash` para o teste fixar o contador, e
@@ -97,6 +98,10 @@ export function createMemoryStore(): MemorySessionStore {
       return messages.filter(
         (m) => m.sessionId === sessionId && (afterIso === undefined || afterIso === null || m.createdAt > afterIso),
       );
+    },
+
+    async findMessageByWaId(sessionId, waMessageId) {
+      return messages.find((m) => m.sessionId === sessionId && m.waMessageId === waMessageId) ?? null;
     },
 
     async registerSentMessageId(sessionId, waMessageId) {
