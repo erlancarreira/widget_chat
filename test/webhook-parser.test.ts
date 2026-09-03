@@ -45,6 +45,14 @@ describe("parseWebhookEvent", () => {
       expect(r.event.raw).toBe(upsert.data);
     }
   });
+  it("dois itens válidos em data[] → devolve o PRIMEIRO (pin de regressão FIRST vs LAST)", () => {
+    const primeiroValido = { ...upsert.data, key: { ...upsert.data.key, id: "FIRST" } };
+    const r = parseWebhookEvent({ ...upsert, data: [primeiroValido, upsert.data] });
+    expect(r.kind).toBe("message");
+    if (r.kind === "message") {
+      expect(r.event.waMessageId).toBe("FIRST");
+    }
+  });
   it("array onde nenhum item é válido → ignored", () => {
     const semKey = { key: null, message: { conversation: "sem id" } };
     expect(parseWebhookEvent({ ...upsert, data: [] })).toMatchObject({ kind: "ignored" });
