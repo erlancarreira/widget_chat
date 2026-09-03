@@ -1,0 +1,604 @@
+// test/bridge/bridge.test.ts — orquestração do ChatBridge com dependências injetadas.
+//
+// Estratégia: EvolutionClient 100% mockado (vi.fn), SessionStore pelo fake compartilhado
+// (test/helpers/memory.ts) e RealtimeTransport como espião. Relógio fixo via `clock` para
+// pinar timestamps. Asserções são de COMPORTAMENTO observável (o que foi persistido /
+// publicado / enviado), não de estrutura interna.
+
+import { describe, expect, it, vi } from "vitest";
+import { ChatBridge } from "../../src/bridge/bridge";
+import { formatFirstMessage, formatFollowup } from "../../src/bridge/format";
+import { ChatError } from "../../src/errors";
+import type { EvolutionClient, CreateGroupResult, SendTextResult } from "../../src/api/client";
+import { EvolutionApiError } from "../../src/api/client";
+import type { RealtimeTransport } from "../../src/bridge/types";
+import type { ChatConfig, ChatSession, ChatSessionStatus } from "../../src/types";
+import type { MemorySessionStore } from "../helpers/memory";
+import { createMemoryStore } from "../helpers/memory";
+
+const NOW = new Date("2025-03-01T10:00:00.000Z");
+const NOW_ISO = NOW.toISOString();
+
+const VISITOR_PHONE = "5511999998888";
+const VISITOR_JID = "5511999998888@s.whatsapp.net";
+const PLATFORM_PHONE = "5511988887777";
+const PLATFORM_JID = "5511988887777@s.whatsapp.net";
+const GROUP_JID = "120363000000000001@g.us";
+const SENT_WA_ID = "WA-SENT-1";
+const INSTANCE = "principal";
+
+function config(over: Partial<ChatConfig> = {}): ChatConfig {
+  return {
+    enabled: true,
+    projectName: "LMS",
+    platformNumber: PLATFORM_PHONE,
+    evolutionUrl: "https://evo.example.com",
+    instance: INSTANCE,
+    apiKey: "api-key",
+    welcome: "Olá! Como podemos ajudar?",
+    closeHours: 0,
+    leaveOnClose: false,
+    webhookToken: "webhook-token",
+    ...over,
+  };
+}
+
+interface ClientOverrides {
+  sendText?: (instance: string, number: string, text: string) => Promise<SendTextResult>;
+  createGroup?: (instance: string, subject: string, participants: string[]) => Promise<CreateGroupResult>;
+}
+
+function mockClient(over: ClientOverrides = {}) {
+  const sendText = vi.fn(
+    over.sendText ?? (async (): Promise<SendTextResult> => ({ waMessageId: SENT_WA_ID })),
+  );
+  const createGroup = vi.fn(
+    over.createGroup ?? (async (): Promise<CreateGroupResult> => ({ groupJid: GROUP_JID })),
+  );
+  const client: EvolutionClient = {
+    sendText,
+    createGroup,
+    leaveGroup: vi.fn(async () => undefined),
+    getConnectionState: vi.fn(async () => "open" as const),
+    connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
+    setWebhook: vi.fn(async () => undefined),
+  };
+  return { client, sendText, createGroup };
+}
+
+interface SetupOptions {
+  client?: ClientOverrides;
+  cfg?: Partial<ChatConfig>;
+  store?: MemorySessionStore;
+}
+
+function setup(opts: SetupOptions = {}) {
+  const store = opts.store ?? createMemoryStore();
+  const { client, sendText, createGroup } = mockClient(opts.client);
+  // T do mock anotado com a assinatura da porta: dá tipos corretos a publish.mock.calls.
+  const publish = vi.fn<RealtimeTransport["publish"]>(async () => undefined);
+  const transport: RealtimeTransport = { publish };
+  const bridge = new ChatBridge({ client, store, transport, clock: () => NOW });
+  bridge.setConfig(config(opts.cfg));
+  return { bridge, store, transport, publish, client, sendText, createGroup };
+}
+
+async function seedSession(
+  store: MemorySessionStore,
+  opts: { realtimeToken?: string; groupJid?: string | null; status?: ChatSessionStatus; visitorName?: string } = {},
+): Promise<ChatSession> {
+  const session = await store.createSession({
+    code: "A3F2",
+    realtimeToken: opts.realtimeToken ?? "RT-1",
+    visitorName: opts.visitorName ?? "João",
+    visitorPhone: VISITOR_PHONE,
+    groupJid: opts.groupJid === undefined ? GROUP_JID : opts.groupJid,
+  });
+  if (opts.status !== undefined) await store.markStatus(session.id, opts.status);
+  return session;
+}
+
+async function captureError(promise: Promise<unknown>): Promise<ChatError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error, "erro lançado deveria ser ChatError").toBeInstanceOf(ChatError);
+    return error as ChatError;
+  }
+  throw new Error("esperava um ChatError, mas a promise resolveu");
+}
+
+function upsertPayload(over: { id?: string; jid?: string; fromMe?: boolean; text?: string } = {}): unknown {
+  return {
+    event: "messages.upsert",
+    source: INSTANCE,
+    data: [
+      {
+        key: {
+          id: over.id ?? "WA-IN-1",
+          remoteJid: over.jid ?? GROUP_JID,
+          fromMe: over.fromMe ?? false,
+        },
+        message: { conversation: over.text ?? "oi" },
+        messageTimestamp: 1725400000,
+      },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// format.ts (Strategy isolada)
+// ---------------------------------------------------------------------------
+
+describe("format", () => {
+  it("formatFirstMessage: prefixo 🆕 + código + nome + quebra de linha + texto", () => {
+    expect(formatFirstMessage("A3F2", "João", "Quero comprar")).toBe("🆕 #A3F2 — João (site):\nQuero comprar");
+  });
+
+  it("formatFollowup: \"nome (site): texto\" em linha única", () => {
+    expect(formatFollowup("João", "tem desconto?")).toBe("João (site): tem desconto?");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// config
+// ---------------------------------------------------------------------------
+
+describe("ChatBridge config", () => {
+  it("getConfig devolve a config injetada via setConfig", () => {
+    const { bridge } = setup();
+    expect(bridge.getConfig().projectName).toBe("LMS");
+    bridge.setConfig(config({ projectName: "Outro" }));
+    expect(bridge.getConfig().projectName).toBe("Outro");
+  });
+
+  it("sem setConfig → getConfig lança ChatError", async () => {
+    const store = createMemoryStore();
+    const { client } = mockClient();
+    const bare = new ChatBridge({ client, store, transport: { publish: async () => undefined } });
+    expect(() => bare.getConfig()).toThrow(ChatError);
+    await expect(captureError(bare.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" }))).resolves.toMatchObject({
+      code: "invalid_input",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startChat
+// ---------------------------------------------------------------------------
+
+describe("ChatBridge.startChat", () => {
+  it("fluxo feliz: subject/participants exatos, mensagem inicial formatada, sessão retornada", async () => {
+    const { bridge, store, publish, createGroup, sendText } = setup();
+
+    const result = await bridge.startChat({
+      name: "João Silva",
+      phone: "(11) 99999-8888",
+      message: "Quero comprar",
+    });
+
+    expect(createGroup).toHaveBeenCalledTimes(1);
+    expect(createGroup.mock.calls[0]?.[0]).toBe(INSTANCE);
+    expect(createGroup.mock.calls[0]?.[1]).toBe(`LMS — João Silva (#${result.session.code})`);
+    expect(createGroup.mock.calls[0]?.[2]).toEqual([VISITOR_JID, PLATFORM_JID]);
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0]?.[0]).toBe(INSTANCE);
+    expect(sendText.mock.calls[0]?.[1]).toBe(GROUP_JID);
+    expect(sendText.mock.calls[0]?.[2]).toBe(`🆕 #${result.session.code} — João Silva (site):\nQuero comprar`);
+
+    // o criador já vê a própria mensagem: nada é publicado no canal realtime
+    expect(publish).not.toHaveBeenCalled();
+
+    expect(result.session.status).toBe("active");
+    expect(result.session.groupJid).toBe(GROUP_JID);
+    expect(result.session.visitorName).toBe("João Silva");
+    expect(result.session.visitorPhone).toBe(VISITOR_PHONE); // normalizado (DDI 55)
+    expect(result.session.code).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$/);
+    expect(result.session.realtimeToken.length).toBeGreaterThan(20);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({
+      sessionId: result.session.id,
+      direction: "visitor",
+      body: "Quero comprar",
+      status: "sent",
+      waMessageId: SENT_WA_ID,
+    });
+    expect(store.messages).toEqual(result.messages);
+  });
+
+  it("registra o waMessageId enviado (dedupe de eco) e persiste contact", async () => {
+    const { bridge, store } = setup();
+    const { session } = await bridge.startChat({
+      name: "João",
+      phone: VISITOR_PHONE,
+      message: "oi",
+      contact: "5511999998888@s.whatsapp.net",
+    });
+
+    expect(await store.isEcho(session.id, SENT_WA_ID)).toBe(true);
+    expect(store.sessions[0]?.visitorContact).toBe("5511999998888@s.whatsapp.net");
+  });
+
+  it("honeypot preenchido → sucesso falso sem criar grupo, enviar ou persistir", async () => {
+    const { bridge, store, publish, createGroup, sendText } = setup();
+
+    const result = await bridge.startChat({
+      name: "Bot",
+      phone: VISITOR_PHONE,
+      message: "spam",
+      honeypot: "tem-nada",
+    });
+
+    expect(createGroup).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(store.sessions).toHaveLength(0);
+    expect(store.messages).toHaveLength(0);
+    expect(result.session.status).toBe("closed");
+    expect(result.session.code).toBe("XXXX");
+    expect(result.session.groupJid).toBeNull();
+    expect(result.messages).toEqual([]);
+  });
+
+  it("rate limit: 5 sessões recentes no ipHash → ChatError rate_limited (janela de 10min)", async () => {
+    const { bridge, store, createGroup } = setup();
+    store.recentByIpHash = 5;
+
+    const error = await captureError(
+      bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi", ipHash: "abc123" }),
+    );
+    expect(error.code).toBe("rate_limited");
+    expect(store.ipHashChecks).toEqual([["abc123", 10 * 60 * 1000]]);
+    expect(createGroup).not.toHaveBeenCalled();
+    expect(store.sessions).toHaveLength(0);
+  });
+
+  it("rate limit: 4 sessões recentes → segue o fluxo normal", async () => {
+    const { bridge, store, createGroup } = setup();
+    store.recentByIpHash = 4;
+
+    await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi", ipHash: "abc123" });
+    expect(createGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("sem ipHash → não consulta o contador de sessões por IP", async () => {
+    const { bridge, store } = setup();
+    store.recentByIpHash = 99;
+
+    await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
+    expect(store.ipHashChecks).toEqual([]);
+  });
+
+  it("valida name (2–60), message (1–1000) e phone → ChatError invalid_input sem efeitos", async () => {
+    const cases: Array<[string, { name: string; phone: string; message: string }]> = [
+      ["name com 1 caractere", { name: "J", phone: VISITOR_PHONE, message: "oi" }],
+      ["name com 61 caracteres", { name: "a".repeat(61), phone: VISITOR_PHONE, message: "oi" }],
+      ["name só espaços", { name: "   ", phone: VISITOR_PHONE, message: "oi" }],
+      ["message vazio", { name: "João", phone: VISITOR_PHONE, message: "" }],
+      ["message com 1001 caracteres", { name: "João", phone: VISITOR_PHONE, message: "a".repeat(1001) }],
+      ["phone sem dígitos", { name: "João", phone: "---", message: "oi" }],
+      ["phone curto demais", { name: "João", phone: "12345", message: "oi" }],
+    ];
+
+    for (const [label, input] of cases) {
+      const { bridge, store, createGroup } = setup();
+      const error = await captureError(bridge.startChat(input));
+      expect(error.code, label).toBe("invalid_input");
+      expect(createGroup, label).not.toHaveBeenCalled();
+      expect(store.sessions, label).toHaveLength(0);
+    }
+  });
+
+  it("aceita name/message nos limites exatos (2/60 e 1/1000)", async () => {
+    for (const [name, message] of [
+      ["Jo", "o"],
+      ["a".repeat(60), "a".repeat(1000)],
+    ] as const) {
+      const { bridge } = setup();
+      const { session } = await bridge.startChat({ name, phone: VISITOR_PHONE, message });
+      expect(session.status, `name=${name.length}/msg=${message.length}`).toBe("active");
+    }
+  });
+
+  it("createGroup falha nas duas tentativas → ChatError group_create_failed, nada persistido", async () => {
+    const { bridge, store, sendText, createGroup } = setup({
+      client: {
+        createGroup: async () => {
+          throw new EvolutionApiError(500, "boom", "createGroup");
+        },
+      },
+    });
+
+    const error = await captureError(bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" }));
+    expect(error.code).toBe("group_create_failed");
+    expect(error.cause).toBeInstanceOf(EvolutionApiError);
+    expect(createGroup).toHaveBeenCalledTimes(2);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(store.sessions).toHaveLength(0);
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it("participante inválido não aborta: remove o da plataforma e tenta de novo uma vez", async () => {
+    let attempts = 0;
+    const { bridge, store, createGroup } = setup({
+      client: {
+        createGroup: async (_instance, _subject, participants) => {
+          attempts += 1;
+          if (participants.includes(PLATFORM_JID)) {
+            throw new EvolutionApiError(400, "participant invalid", "createGroup");
+          }
+          return { groupJid: GROUP_JID };
+        },
+      },
+    });
+
+    const { session } = await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
+
+    expect(attempts).toBe(2);
+    expect(createGroup).toHaveBeenCalledTimes(2);
+    expect(createGroup.mock.calls[0]?.[2]).toEqual([VISITOR_JID, PLATFORM_JID]);
+    expect(createGroup.mock.calls[1]?.[2]).toEqual([VISITOR_JID]);
+    expect(session.groupJid).toBe(GROUP_JID);
+    expect(store.sessions).toHaveLength(1);
+  });
+
+  it("visitor == platform → createGroup chamado UMA vez com lista dedupe", async () => {
+    const { bridge, createGroup } = setup({ cfg: { platformNumber: VISITOR_PHONE } });
+
+    await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
+
+    expect(createGroup).toHaveBeenCalledTimes(1);
+    expect(createGroup.mock.calls[0]?.[2]).toEqual([VISITOR_JID]);
+  });
+
+  it("sendText da mensagem inicial falha → ChatError send_failed e sessão marcada failed", async () => {
+    const { bridge, store } = setup({
+      client: {
+        sendText: async () => {
+          throw new EvolutionApiError(503, "offline", "sendText");
+        },
+      },
+    });
+
+    const error = await captureError(bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" }));
+    expect(error.code).toBe("send_failed");
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0]?.status).toBe("failed");
+    expect(store.messages).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendVisitorMessage (relay site → grupo)
+// ---------------------------------------------------------------------------
+
+describe("ChatBridge.sendVisitorMessage", () => {
+  it("envia ao grupo, promove pending → sent, registra eco e toca a sessão", async () => {
+    const { bridge, store, publish, sendText } = setup();
+    const session = await seedSession(store);
+
+    const message = await bridge.sendVisitorMessage("RT-1", "tem desconto?");
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0]?.[0]).toBe(INSTANCE);
+    expect(sendText.mock.calls[0]?.[1]).toBe(GROUP_JID);
+    expect(sendText.mock.calls[0]?.[2]).toBe("João (site): tem desconto?");
+
+    expect(message).toMatchObject({
+      sessionId: session.id,
+      direction: "visitor",
+      body: "tem desconto?",
+      status: "sent",
+      waMessageId: SENT_WA_ID,
+    });
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0]?.status).toBe("sent"); // updateMessageStatus, não novo append
+    expect(store.messages[0]?.body).toBe("tem desconto?"); // corpo cru (sem prefixo do grupo)
+    expect(await store.isEcho(session.id, SENT_WA_ID)).toBe(true);
+    expect(store.sessions[0]?.lastMessageAt).toBe(NOW_ISO);
+    expect(publish).not.toHaveBeenCalled(); // o widget já tem a msg localmente
+  });
+
+  it("não depende de o store mutar a referência: devolve a mensagem já sent", async () => {
+    const store = createMemoryStore();
+    // Um adapter real (SQL) persiste e devolve linhas novas — não muta o objeto que o
+    // bridge recebeu no appendMessage. Sem cópia defensiva, o retorno diria "pending".
+    store.updateMessageStatus = vi.fn(async () => undefined);
+    const { bridge } = setup({ store });
+    await seedSession(store);
+
+    const message = await bridge.sendVisitorMessage("RT-1", "oi");
+    expect(message.status).toBe("sent");
+    expect(message.waMessageId).toBe(SENT_WA_ID);
+  });
+
+  it("token desconhecido → ChatError session_not_found", async () => {
+    const { bridge, sendText } = setup();
+    const error = await captureError(bridge.sendVisitorMessage("nope", "oi"));
+    expect(error.code).toBe("session_not_found");
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("sessão fechada → ChatError session_closed e nada é enviado", async () => {
+    const { bridge, store, sendText } = setup();
+    await seedSession(store, { status: "closed" });
+
+    const error = await captureError(bridge.sendVisitorMessage("RT-1", "oi"));
+    expect(error.code).toBe("session_closed");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it("texto vazio → ChatError invalid_input", async () => {
+    const { bridge, store, sendText } = setup();
+    await seedSession(store);
+    const error = await captureError(bridge.sendVisitorMessage("RT-1", "   "));
+    expect(error.code).toBe("invalid_input");
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("sessão sem groupJid → ChatError send_failed sem persistir mensagem", async () => {
+    const { bridge, store, sendText } = setup();
+    await seedSession(store, { groupJid: null });
+
+    const error = await captureError(bridge.sendVisitorMessage("RT-1", "oi"));
+    expect(error.code).toBe("send_failed");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it("instância offline (client rejeita) → status failed + rethrow ChatError send_failed", async () => {
+    const { bridge, store } = setup({
+      client: {
+        sendText: async () => {
+          throw new EvolutionApiError(503, "close", "sendText");
+        },
+      },
+    });
+    const session = await seedSession(store);
+
+    const error = await captureError(bridge.sendVisitorMessage("RT-1", "oi"));
+    expect(error.code).toBe("send_failed");
+    expect(error.cause).toBeInstanceOf(EvolutionApiError);
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0]?.status).toBe("failed");
+    expect(store.messages[0]?.sessionId).toBe(session.id);
+    expect(store.sessions[0]?.lastMessageAt).toBeNull(); // sessão não foi tocada
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleWebhook (grupo → store + canal realtime)
+// ---------------------------------------------------------------------------
+
+describe("ChatBridge.handleWebhook", () => {
+  it("reply do dono (fromMe em grupo conhecido) → append owner + publish com o realtimeToken", async () => {
+    const { bridge, store, publish } = setup();
+    const session = await seedSession(store);
+
+    const result = await bridge.handleWebhook(
+      upsertPayload({ id: "WA-IN-1", fromMe: true, text: "Sim, tem desconto" }),
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0]).toMatchObject({
+      sessionId: session.id,
+      direction: "owner",
+      body: "Sim, tem desconto",
+      status: "sent",
+      waMessageId: "WA-IN-1",
+    });
+    expect(store.sessions[0]?.lastMessageAt).toBe(NOW_ISO);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls[0]?.[0]).toBe(session.realtimeToken);
+    expect(publish.mock.calls[0]?.[1]).toEqual({ type: "message", message: store.messages[0] });
+  });
+
+  it("visitor responde do próprio WhatsApp (fromMe=false no grupo) → direction visitor", async () => {
+    const { bridge, store, publish } = setup();
+    const session = await seedSession(store);
+
+    const result = await bridge.handleWebhook(upsertPayload({ id: "WA-IN-2", fromMe: false, text: "boa tarde" }));
+
+    expect(result).toEqual({ handled: true });
+    expect(store.messages[0]?.direction).toBe("visitor");
+    expect(store.messages[0]?.body).toBe("boa tarde");
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls[0]?.[0]).toBe(session.realtimeToken);
+  });
+
+  it("eco de mensagem enviada por nós → handled:false, sem append e sem publish", async () => {
+    const { bridge, store, publish } = setup();
+    const session = await seedSession(store);
+    await store.registerSentMessageId(session.id, "WA-ECHO");
+
+    const result = await bridge.handleWebhook(upsertPayload({ id: "WA-ECHO", fromMe: true, text: "🆕 #A3F2 — João" }));
+
+    expect(result).toEqual({ handled: false });
+    expect(store.messages).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+    expect(store.sessions[0]?.lastMessageAt).toBeNull();
+  });
+
+  it("grupo sem sessão → handled:false, sem publish", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store, { groupJid: "120363other@g.us" });
+
+    const result = await bridge.handleWebhook(upsertPayload({ jid: "120363unknown@g.us" }));
+
+    expect(result).toEqual({ handled: false });
+    expect(store.messages).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("mensagem direta (não @g.us) → handled:false", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store);
+
+    const result = await bridge.handleWebhook(upsertPayload({ jid: `${VISITOR_PHONE}@s.whatsapp.net` }));
+
+    expect(result).toEqual({ handled: false });
+    expect(store.messages).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("connection.update → handled:false (sem tocar no store)", async () => {
+    const { bridge, store, publish } = setup();
+    const result = await bridge.handleWebhook({ event: "connection.update", data: { state: "open" } });
+    expect(result).toEqual({ handled: false });
+    expect(store.messages).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("payload lixo → handled:false", async () => {
+    const { bridge } = setup();
+    for (const payload of [null, undefined, 42, "text", {}, { event: "messages.upsert", data: [] }]) {
+      expect(await bridge.handleWebhook(payload)).toEqual({ handled: false });
+    }
+  });
+
+  it("nunca lança: falha do store é logada e devolve handled:false", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    store.appendMessage = vi.fn(async () => {
+      throw new Error("store caiu");
+    });
+
+    const result = await bridge.handleWebhook(upsertPayload({ fromMe: true, text: "oi" }));
+
+    expect(result).toEqual({ handled: false });
+    expect(publish).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// history
+// ---------------------------------------------------------------------------
+
+describe("ChatBridge.history", () => {
+  it("token desconhecido → sessão null e sem mensagens (null-safe)", async () => {
+    const { bridge } = setup();
+    expect(await bridge.history("nope")).toEqual({ session: null, messages: [] });
+  });
+
+  it("retorna sessão + mensagens; afterIso filtra o que já foi visto", async () => {
+    const { bridge, store } = setup();
+    const session = await seedSession(store);
+    await store.appendMessage({ sessionId: session.id, direction: "visitor", body: "oi" });
+    await store.appendMessage({ sessionId: session.id, direction: "owner", body: "olá" });
+
+    const all = await bridge.history("RT-1");
+    expect(all.session).toEqual(session);
+    expect(all.messages.map((m) => m.body)).toEqual(["oi", "olá"]);
+
+    expect((await bridge.history("RT-1", "1970-01-01T00:00:00.000Z")).messages).toHaveLength(2);
+    expect((await bridge.history("RT-1", "2999-01-01T00:00:00.000Z")).messages).toHaveLength(0);
+    expect((await bridge.history("RT-1", null)).messages).toHaveLength(2);
+  });
+});
