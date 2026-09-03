@@ -101,7 +101,15 @@ export function parseWebhookEvent(payload: unknown): ParsedWebhook {
     return { kind: "ignored", reason: `evento não tratado: ${event}` };
   }
 
-  // Evolution v2 pode mandar `data` como objeto único ou array de mensagens.
+  // Evolution v2 pode mandar `data` como objeto único ou array de mensagens (queue-flush/bulk).
+  // Contrato de evento único: devolve o PRIMEIRO item válido, não `items[0]` — senão um item
+  // nulo/inválido na frente descartaria silenciosamente as mensagens válidas seguintes.
   const items: readonly unknown[] = Array.isArray(data) ? data : [data];
-  return parseMessageItem(items[0]);
+  let lastIgnored: ParsedWebhook = { kind: "ignored", reason: "messages.upsert sem data válido" };
+  for (const item of items) {
+    const parsed = parseMessageItem(item);
+    if (parsed.kind !== "ignored") return parsed;
+    lastIgnored = parsed;
+  }
+  return lastIgnored;
 }
