@@ -1,4 +1,12 @@
-dist/
+# Build output (one root-level dir per publishable subpath)
+/api/
+/bridge/
+/next/
+/transports/
+/widget/
+/widget-embed/
 node_modules/
 coverage/
 *.tgz
+# Agent working artifacts (review packages, etc.) — not part of the package
+.superpowers/

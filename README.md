@@ -14,13 +14,13 @@ transporte são injetados; o adapter oficial usa Supabase, mas qualquer banco se
 | `./next` | `createChatRoutes`, `createWebhookRoute` (App Router, sem importar `next`) |
 | `./transports/supabase` | `createSupabaseTransport` (server) · `createSupabaseRealtimeHandle` (widget) |
 | `./widget` | `<ChatWidget>` React + `injectWidgetStyles` + i18n (pt/en/es) |
-| `dist/widget-embed/evolution-chat.iife.js` | `<evolution-chat>` standalone (`<script>`, React embutido) |
+| `widget-embed/evolution-chat.iife.js` | `<evolution-chat>` standalone (`<script>`, React embutido) |
 
 ## Instalação
 
 ```bash
 npm install @erlancarreira/evolution-chat   # npm (react + react-dom são peers)
-npm install github:erlan/evolution-chat     # do repositório — rode `npm run build` (dist/ não é versionado)
+npm install github:erlancarreira/evolution-chat     # do repositório — rode `npm run build` (a saída não é versionada)
 npm install file:../evolution-chat          # cópia local em desenvolvimento (idem)
 ```
 
@@ -84,7 +84,7 @@ export function SupportChat() {
 
 ## Quickstart — `<script>` (sem bundler)
 
-Sirva `dist/widget-embed/evolution-chat.iife.js` (copie para `public/` ou aponte para o CDN;
+Sirva `widget-embed/evolution-chat.iife.js` (copie para `public/` ou aponte para o CDN;
 ≈1 MB não minificado, ~207 kB gzip) e use a tag: atributos viram props, e
 `data-supabase-url`/`data-supabase-key` ligam o realtime — sem eles o widget cai no polling de
 5 s em vez de quebrar.
@@ -144,7 +144,8 @@ painel, ou o polling quando o canal cai).
 ```ts
 export interface SessionStore {
   createSession(input: { code: string; realtimeToken: string; visitorName: string;
-    visitorPhone: string; visitorContact?: string | null; groupJid: string | null }): Promise<ChatSession>;
+    visitorPhone: string; visitorContact?: string | null; groupJid: string | null;
+    ipHash?: string | null; userAgent?: string | null }): Promise<ChatSession>;
   getSessionByToken(token: string): Promise<ChatSession | null>;         // token = realtimeToken
   getSessionByGroupJid(jid: string): Promise<ChatSession | null>;        // roteia o webhook pelo grupo
   appendMessage(input: { sessionId: string; direction: ChatMessageDirection; body: string;
@@ -171,10 +172,11 @@ O que o bridge **espera** do seu adapter:
 - `getSessionByGroupJid` é 1 grupo ↔ 1 sessão; o router **não** filtra por status, então
   devolva `null` em `closed`/`failed` para não anexar mensagens a conversa encerrada.
   `touchSession` atualiza `lastMessageAt` (o que alimenta um job de `closeHours`).
-- `countRecentSessionsByIpHash` é a guarda de 5 sessões/IP/10 min — mas a porta não transporta
-  `ipHash` até `createSession`, então o adapter precisa de fonte própria para esse par (tabela
-  lateral escrita no request, ou contador Redis com TTL). O `limiter` de `createChatRoutes`
-  funciona sem nenhuma tabela.
+- `countRecentSessionsByIpHash` é a guarda de 5 sessões/IP/10 min. O `ipHash` e o `userAgent`
+  da requisição chegam ao adapter via `createSession({ ..., ipHash, userAgent })`, então basta
+  persistir as colunas `ip_hash`/`user_agent` da migration para a contagem funcionar contra a
+  mesma tabela `chat_sessions` (o adapter Supabase do LMS faz isso). O `limiter` de
+  `createChatRoutes` (30 POSTs/min/IP) funciona independente, via a porta `ChatLimiter`.
 - Falha de infraestrutura: `throw` — as rotas mapeiam para 500/502 (nunca 422).
 
 ## Segurança
@@ -196,5 +198,5 @@ O que o bridge **espera** do seu adapter:
 
 ## Desenvolvimento
 
-`npm run build` (tsup → `dist/{api,bridge,next,transports/supabase,widget,widget-embed}`) ·
+`npm run build` (tsup → `{api,bridge,next,transports/supabase,widget,widget-embed}` na raiz do pacote) ·
 `npm test` (vitest, node + jsdom) · `npm run typecheck` · `npm run lint`. Licença: MIT.

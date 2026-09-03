@@ -31,6 +31,7 @@ export interface StartChatInput {
   message: string;
   contact?: string | null;
   ipHash?: string | null;
+  userAgent?: string | null;
   honeypot?: string | null;
 }
 
@@ -146,6 +147,8 @@ export class ChatBridge {
       visitorPhone: phone,
       visitorContact: input.contact ?? null,
       groupJid,
+      ipHash: input.ipHash ?? null,
+      userAgent: input.userAgent ?? null,
     });
 
     let waMessageId: string;

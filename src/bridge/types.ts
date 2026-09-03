@@ -25,6 +25,10 @@ export interface SessionStore {
     visitorPhone: string;
     visitorContact?: string | null;
     groupJid: string | null;
+    /** Hash não-reversível do IP (LGPD): usado por countRecentSessionsByIpHash. */
+    ipHash?: string | null;
+    /** User-Agent bruto da requisição (auditoria/forense; nunca exibido). */
+    userAgent?: string | null;
   }): Promise<ChatSession>;
   getSessionByToken(token: string): Promise<ChatSession | null>;
   getSessionByGroupJid(jid: string): Promise<ChatSession | null>;

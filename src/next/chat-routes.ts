@@ -234,6 +234,7 @@ export function createChatRoutes(deps: ChatRoutesDeps): ChatRoutes {
         message: asText(body["message"]),
         contact: typeof body["contact"] === "string" ? body["contact"] : null,
         ipHash,
+        userAgent: req.headers.get("user-agent") ?? null,
         honeypot: typeof body["honeypot"] === "string" ? body["honeypot"] : null,
       });
       return json(200, {

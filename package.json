@@ -4,17 +4,9 @@
   "description": "Chat widget + Evolution API bridge (WhatsApp) — reutilizável, hexagonal, SOLID",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/api/index.js",
-  "types": "./dist/api/index.d.ts",
-  "exports": {
-    "./api": { "types": "./dist/api/index.d.ts", "import": "./dist/api/index.js", "require": "./dist/api/index.cjs" },
-    "./bridge": { "types": "./dist/bridge/index.d.ts", "import": "./dist/bridge/index.js", "require": "./dist/bridge/index.cjs" },
-    "./next": { "types": "./dist/next/index.d.ts", "import": "./dist/next/index.js", "require": "./dist/next/index.cjs" },
-    "./transports/supabase": { "types": "./dist/transports/supabase/index.d.ts", "import": "./dist/transports/supabase/index.js", "require": "./dist/transports/supabase/index.cjs" },
-    "./widget": { "types": "./dist/widget/index.d.ts", "import": "./dist/widget/index.js", "require": "./dist/widget/index.cjs" },
-    "./widget/styles.css": "./dist/widget/styles.css"
-  },
-  "files": ["dist", "README.md"],
+  "main": "./api/index.js",
+  "types": "./api/index.d.ts",
+  "files": ["api", "bridge", "next", "transports", "widget", "widget-embed", "README.md"],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",

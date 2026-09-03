@@ -1,0 +1,20 @@
+# Source & tests are not shipped — only the built subpath dirs (api/, bridge/,
+# next/, transports/, widget/, widget-embed/) listed in package.json "files".
+src/
+test/
+coverage/
+
+# Dev/tooling
+node_modules/
+*.tgz
+tsup.config.ts
+tsconfig.json
+tsconfig.*.json
+vitest.config.ts
+vitest.workspace.ts
+.eslintrc*
+eslint.config.*
+.editorconfig
+.github/
+.gitignore
+.npmignore

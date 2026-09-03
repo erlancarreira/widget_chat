@@ -10,7 +10,7 @@
 //   4. sem texto                              → not_text
 //   5. caso contrário                         → route, direction = fromMe ? owner : visitor
 
-import type { InboundMessage } from "../api/webhook-parser";
+import type { InboundMessage } from "../types";
 import type { ChatMessageDirection } from "../types";
 import type { RouterDecision, SessionStore } from "./types";
 

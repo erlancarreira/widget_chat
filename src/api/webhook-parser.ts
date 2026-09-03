@@ -3,23 +3,12 @@
 // Contrato: parseWebhookEvent(payload: unknown): ParsedWebhook.
 // NUNCA lança exceção — qualquer payload inesperado/inválido vira { kind: "ignored", reason }.
 
+import type { InboundMessage } from "../types";
+
 export type ParsedWebhook =
   | { kind: "message"; event: InboundMessage }
   | { kind: "connection"; state: string }
   | { kind: "ignored"; reason: string };
-
-// Contrato (verbatim do plano): InboundMessage abaixo. `raw` carrega o item original de
-// `data` (sem normalizar) para auditoria/reprocesso; o parser nunca devolve `text: null`
-// em kind "message" (texto vazio → ignored), mas o tipo admite null para consumidores.
-export interface InboundMessage {
-  waMessageId: string;
-  jid: string;            // remoteJid (grupo → "@g.us")
-  fromMe: boolean;
-  senderJid: string | null;
-  text: string | null;    // conversation | extendedTextMessage.text (trim)
-  timestamp: number;      // segundos
-  raw: unknown;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
