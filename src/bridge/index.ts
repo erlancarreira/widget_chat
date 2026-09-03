@@ -8,6 +8,11 @@ export * from "./router";
 export * from "./format";
 export * from "./bridge";
 
+// Erros de domínio compartilhados: o consumidor externo (ex.: stores do LMS) precisa
+// importar ChatError/ChatErrorCode daqui para que `instanceof ChatError` funcione —
+// cópias locais do tipo nunca casam com os erros lançados pelas rotas do SDK.
+export * from "../errors";
+
 // Tipos de domínio que aparecem nas assinaturas das portas, reexportados para que o
 // consumidor do subpath ./bridge não precise importar do caminho interno src/types.
 export type {
