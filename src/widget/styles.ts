@@ -1,0 +1,288 @@
+// src/widget/styles.ts — injeção idempotente da folha de estilos do widget.
+//
+// O widget é auto-contido: `injectWidgetStyles()` insere `<style id="ecw-styles">` com as
+// classes `.ecw-*` uma única vez (múltiplas chamadas / múltiplas instâncias não duplicam).
+// O texto abaixo é o ESPELHO exato de `src/widget/styles.css` (arquivo publicado no
+// subpath "./widget/styles.css" para quem prefere `<link>`); o teste de paridade em
+// test/widget/widget.test.tsx falha se os dois divergirem.
+
+export const WIDGET_CSS = `/*
+ * src/widget/styles.css — folha de estilos do ChatWidget (classes \`.ecw-*\`).
+ *
+ * Fonte canônica do CSS INJETADO em runtime: src/widget/styles.ts espelha este arquivo
+ * e injeta \`<style id="ecw-styles">\` via \`injectWidgetStyles()\` (o widget é
+ * auto-contido — o consumidor não precisa importar CSS). O teste de paridade em
+ * test/widget/widget.test.tsx garante que os dois textos não divergem.
+ * Consumidores que preferem \`<link>\` podem importar "@erlancarreira/evolution-chat/widget/styles.css".
+ *
+ * Acessibilidade: \`color-scheme\` (dark nativo), \`:focus-visible\` sempre visível,
+ * contraste AA sobre o accent (texto escuro no verde), e transições desligadas com
+ * \`prefers-reduced-motion\`.
+ */
+
+.ecw-root {
+  --ecw-accent: #25d366;
+  --ecw-accent-ink: #06251a;
+  --ecw-surface: #ffffff;
+  --ecw-surface-2: #f1f4f7;
+  --ecw-text: #14181d;
+  --ecw-muted: #51606e;
+  --ecw-border: #d7dde3;
+  --ecw-danger: #b3261e;
+  --ecw-shadow: 0 8px 28px rgb(9 20 28 / 22%);
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ecw-text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .ecw-root {
+    --ecw-accent-ink: #04170f;
+    --ecw-surface: #151a20;
+    --ecw-surface-2: #232a33;
+    --ecw-text: #e8edf2;
+    --ecw-muted: #9aa7b4;
+    --ecw-border: #2c343d;
+    --ecw-danger: #ff9a8f;
+    --ecw-shadow: 0 8px 28px rgb(0 0 0 / 45%);
+  }
+}
+
+/* ── balão flutuante ─────────────────────────────────────────────────────── */
+.ecw-button {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--ecw-accent);
+  color: var(--ecw-accent-ink);
+  box-shadow: var(--ecw-shadow);
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+.ecw-button:hover { transform: translateY(-2px) scale(1.03); }
+.ecw-button:active { transform: translateY(0) scale(0.98); }
+.ecw-button svg { width: 26px; height: 26px; }
+
+.ecw-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  border: 2px solid var(--ecw-surface);
+  background: var(--ecw-danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* ── painel ──────────────────────────────────────────────────────────────── */
+.ecw-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 88px;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 24px));
+  min-width: 320px;
+  height: 480px;
+  max-height: 70vh;
+  overflow: hidden;
+  border: 1px solid var(--ecw-border);
+  border-radius: 14px;
+  background: var(--ecw-surface);
+  box-shadow: var(--ecw-shadow);
+  animation: ecw-pop 160ms ease-out;
+}
+@keyframes ecw-pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.ecw-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--ecw-accent);
+  color: var(--ecw-accent-ink);
+}
+.ecw-title { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ecw-code { font-size: 12px; font-weight: 600; opacity: 0.85; letter-spacing: 0.02em; }
+.ecw-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ecw-close:hover { background: rgb(0 0 0 / 12%); }
+
+/* ── lista de mensagens ──────────────────────────────────────────────────── */
+.ecw-list {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  background: var(--ecw-surface-2);
+}
+.ecw-item { display: flex; flex-direction: column; max-width: 82%; }
+.ecw-item--visitor { align-self: flex-end; align-items: flex-end; }
+.ecw-item--owner { align-self: flex-start; align-items: flex-start; }
+.ecw-bubble {
+  padding: 8px 12px;
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ecw-bubble--visitor {
+  background: var(--ecw-accent);
+  color: var(--ecw-accent-ink);
+  border-bottom-right-radius: 4px;
+}
+.ecw-bubble--owner {
+  background: var(--ecw-surface);
+  color: var(--ecw-text);
+  border: 1px solid var(--ecw-border);
+  border-bottom-left-radius: 4px;
+}
+.ecw-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 11px; color: var(--ecw-muted); }
+.ecw-status--failed { color: var(--ecw-danger); }
+.ecw-retry {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ecw-danger);
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── pré-chat form ───────────────────────────────────────────────────────── */
+.ecw-form { display: flex; flex-direction: column; gap: 12px; padding: 16px 14px; overflow-y: auto; }
+.ecw-welcome { margin: 0; font-weight: 600; }
+.ecw-notice { margin: 0; font-size: 12px; color: var(--ecw-muted); }
+.ecw-field { display: flex; flex-direction: column; gap: 4px; }
+.ecw-label { font-size: 12px; font-weight: 600; color: var(--ecw-text); }
+.ecw-input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--ecw-border);
+  border-radius: 8px;
+  background: var(--ecw-surface);
+  color: var(--ecw-text);
+  font: inherit;
+}
+.ecw-input:focus { outline: 2px solid var(--ecw-accent); outline-offset: 1px; }
+.ecw-input[aria-invalid="true"] { border-color: var(--ecw-danger); }
+.ecw-error { margin: 0; font-size: 12px; color: var(--ecw-danger); }
+.ecw-submit {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--ecw-accent);
+  color: var(--ecw-accent-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ecw-submit:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ── composer ────────────────────────────────────────────────────────────── */
+.ecw-composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ecw-border); background: var(--ecw-surface); }
+.ecw-composer .ecw-input { flex: 1; }
+.ecw-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: var(--ecw-accent);
+  color: var(--ecw-accent-ink);
+  cursor: pointer;
+}
+.ecw-send:disabled { opacity: 0.55; cursor: not-allowed; }
+.ecw-send svg { width: 18px; height: 18px; }
+
+.ecw-footer { padding: 6px 12px 10px; font-size: 11px; color: var(--ecw-muted); text-align: center; background: var(--ecw-surface); }
+
+/* ── utilitários ─────────────────────────────────────────────────────────── */
+.ecw-hp { display: none !important; }
+.ecw-sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.ecw-button:focus-visible, .ecw-close:focus-visible, .ecw-submit:focus-visible,
+.ecw-send:focus-visible, .ecw-retry:focus-visible {
+  outline: 3px solid #1b6fec;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ecw-root *, .ecw-root *::before, .ecw-root *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .ecw-panel { right: 12px; left: 12px; width: auto; min-width: 0; bottom: 80px; }
+}
+`;
+
+let injected = false;
+
+/**
+ * Insere a folha do widget no `document.head` (idempotente: uma única tag
+ * `<style id="ecw-styles">` por documento, não importa quantas vezes seja chamada).
+ * No-op fora de browser (SSR / Node) — o consumidor renderiza com `<link>` do subpath.
+ */
+export function injectWidgetStyles(): void {
+  if (typeof document === "undefined") return;
+  if (injected && document.getElementById("ecw-styles") !== null) return;
+  const existing = document.getElementById("ecw-styles");
+  if (existing !== null) {
+    // Alguém (ex.: outra cópia do bundle) já injetou — marca e não duplica.
+    injected = true;
+    return;
+  }
+  const style = document.createElement("style");
+  style.id = "ecw-styles";
+  style.textContent = WIDGET_CSS;
+  document.head.appendChild(style);
+  injected = true;
+}

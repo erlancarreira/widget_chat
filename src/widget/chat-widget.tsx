@@ -1,0 +1,358 @@
+// src/widget/chat-widget.tsx — ChatWidget: balão flutuante + painel de conversa.
+//
+// Sem Tailwind / lib de UI: toda a aparência vem de `injectWidgetStyles()` (classes
+// `.ecw-*`), e o único estilo inline é a CSS var `--ecw-accent` (cor do tema). O estado
+// inteiro vive em `use-chat.ts` (reducer + rede + realtime); aqui só render e foco.
+//
+// Acessibilidade (contrato da spec §2):
+//  - balão: <button> com aria-label (i18n), aria-expanded e aria-haspopup="dialog";
+//  - painel: role="dialog" aria-label="Chat"; foco no primeiro campo ao abrir;
+//    ESC fecha e devolve o foco ao balão; clique fora NÃO fecha (mobile-friendly);
+//  - todo input tem <label htmlFor> (useId → múltiplas instâncias sem colisão);
+//  - badge de não lidas refletido no nome acessível do balão;
+//  - prefers-reduced-motion desliga animações (via CSS).
+
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactElement,
+  type RefObject,
+} from "react";
+import type { RealtimeHandle } from "../bridge/types";
+import type { ChatMessage } from "../types";
+import { t, type WidgetKey, type WidgetLocale } from "./i18n";
+import { injectWidgetStyles } from "./styles";
+import { isValidPhone, maskPhone, useChat } from "./use-chat";
+
+export type { WidgetLocale };
+
+export interface ChatWidgetProps {
+  /** Caminho da rota de chat (GET histórico / POST start+send), ex.: "/api/chat". */
+  endpoint: string;
+  locale: WidgetLocale;
+  /** Saudação exibida no pré-chat form. */
+  welcome: string;
+  projectName: string;
+  /** Cor de tema; default "#25D366". */
+  accentColor?: string;
+  /** Porta do widget (DI — Strategy): subscribe/unsubscribe do canal da sessão. */
+  realtime: RealtimeHandle;
+  /** Override pontual de copy por chave i18n. */
+  labels?: Partial<Record<string, string>>;
+}
+
+const DEFAULT_ACCENT = "#25D366";
+
+function ChatIcon(): ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5c-1.5 0-2.9-.36-4.13-1L3 20l1.1-3.85A8.36 8.36 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+    </svg>
+  );
+}
+
+function SendIcon(): ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M22 2 11 13" />
+      <path d="M22 2 15 22l-4-9-9-4 20-7z" />
+    </svg>
+  );
+}
+
+function formatTime(iso: string, locale: WidgetLocale): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function StatusMark({ status }: { status: ChatMessage["status"] }): ReactElement {
+  // ✓ = aceita pelo servidor (pending), ✓✓ = enviada, ⚠ = falhou.
+  // Decorativo por design: o conjunto de chaves i18n é fixo (14) e o estado "failed" já
+  // é anunciado de forma acessível pelo botão visível `retry` ao lado — um texto sr-only
+  // reaproveitando "send"/"sending" soaria a ruído para quem usa leitor de tela.
+  const glyph = status === "pending" ? "✓" : status === "sent" ? "✓✓" : "⚠";
+  return (
+    <span className={status === "failed" ? "ecw-status ecw-status--failed" : "ecw-status"} aria-hidden="true">
+      {glyph}
+    </span>
+  );
+}
+
+interface FormProps {
+  welcome: string;
+  tr: (k: WidgetKey) => string;
+  error: string | null;
+  sending: boolean;
+  firstFieldRef: RefObject<HTMLInputElement>;
+  onSubmit(values: { name: string; phone: string; message: string; honeypot: string }): Promise<void>;
+}
+
+function PreChatForm({ welcome, tr, error, sending, firstFieldRef, onSubmit }: FormProps): ReactElement {
+  const uid = useId();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState("");
+  const [honeypot, setHoneypot] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
+
+  const phoneValid = isValidPhone(phone);
+  const complete = name.trim() !== "" && phoneValid && message.trim() !== "";
+
+  const handleSubmit = (e: FormEvent): void => {
+    e.preventDefault();
+    if (!complete || sending) return;
+    void onSubmit({ name, phone, message, honeypot });
+  };
+
+  return (
+    <form className="ecw-form" onSubmit={handleSubmit} noValidate>
+      <p className="ecw-welcome">{welcome}</p>
+      <p className="ecw-notice">{tr("welcomeNotice")}</p>
+
+      <div className="ecw-field">
+        <label className="ecw-label" htmlFor={`${uid}-name`}>{tr("name")}</label>
+        <input
+          id={`${uid}-name`}
+          ref={firstFieldRef}
+          className="ecw-input"
+          type="text"
+          autoComplete="name"
+          value={name}
+          onChange={(e) => { setName(e.target.value); }}
+          required
+        />
+      </div>
+
+      <div className="ecw-field">
+        <label className="ecw-label" htmlFor={`${uid}-phone`}>{tr("phone")}</label>
+        <input
+          id={`${uid}-phone`}
+          className="ecw-input"
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          placeholder="(11) 99999-8888"
+          value={phone}
+          onChange={(e) => { setPhone(maskPhone(e.target.value)); }}
+          onBlur={() => { setPhoneTouched(true); }}
+          aria-invalid={phoneTouched && !phoneValid ? true : undefined}
+          aria-describedby={phoneTouched && !phoneValid ? `${uid}-phone-err` : undefined}
+          required
+        />
+        {phoneTouched && !phoneValid && (
+          <p className="ecw-error" id={`${uid}-phone-err`} role="alert">{tr("invalidPhone")}</p>
+        )}
+      </div>
+
+      <div className="ecw-field">
+        <label className="ecw-label" htmlFor={`${uid}-message`}>{tr("message")}</label>
+        <textarea
+          id={`${uid}-message`}
+          className="ecw-input"
+          rows={3}
+          autoComplete="off"
+          value={message}
+          onChange={(e) => { setMessage(e.target.value); }}
+          required
+        />
+      </div>
+
+      {/* Honeypot anti-bot: invisível para humanos (display:none via .ecw-hp),
+          fora da ordem de tabulação e escondido do leitor de tela. */}
+      <div className="ecw-hp" aria-hidden="true">
+        <label htmlFor={`${uid}-website`}>Website</label>
+        <input
+          id={`${uid}-website`}
+          name="website"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          value={honeypot}
+          onChange={(e) => { setHoneypot(e.target.value); }}
+        />
+      </div>
+
+      {error === "sendError" && (
+        <p className="ecw-error" role="alert">{tr("sendError")}</p>
+      )}
+
+      <button className="ecw-submit" type="submit" disabled={!complete || sending}>
+        {sending ? tr("sending") : tr("send")}
+      </button>
+      <p className="ecw-notice">{tr("privacyNote")}</p>
+    </form>
+  );
+}
+
+interface ChatPanelProps {
+  messages: ChatMessage[];
+  closed: boolean;
+  sending: boolean;
+  locale: WidgetLocale;
+  tr: (k: WidgetKey) => string;
+  listRef: RefObject<HTMLUListElement>;
+  firstFieldRef: RefObject<HTMLInputElement>;
+  onSend(text: string): Promise<void>;
+  onRetry(id: string): Promise<void>;
+}
+
+function ChatPanel({ messages, closed, sending, locale, tr, listRef, firstFieldRef, onSend, onRetry }: ChatPanelProps): ReactElement {
+  const uid = useId();
+  const [draft, setDraft] = useState("");
+
+  const submit = (e: FormEvent): void => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (text === "" || closed) return;
+    setDraft("");
+    void onSend(text);
+  };
+
+  return (
+    <>
+      <ul ref={listRef} className="ecw-list">
+        {messages.map((m) => (
+          <li key={m.id} className={`ecw-item ecw-item--${m.direction}`}>
+            <div className={`ecw-bubble ecw-bubble--${m.direction}`}>{m.body}</div>
+            <div className="ecw-meta">
+              <time dateTime={m.createdAt}>{formatTime(m.createdAt, locale)}</time>
+              {m.direction === "visitor" && <StatusMark status={m.status} />}
+              {m.status === "failed" && (
+                <button type="button" className="ecw-retry" onClick={() => { void onRetry(m.id); }}>
+                  {tr("retry")}
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {closed && <p className="ecw-notice" role="status">{tr("sessionClosed")}</p>}
+      <form className="ecw-composer" onSubmit={submit}>
+        <label className="ecw-sr-only" htmlFor={`${uid}-input`}>{tr("message")}</label>
+        <input
+          id={`${uid}-input`}
+          ref={firstFieldRef}
+          className="ecw-input"
+          type="text"
+          autoComplete="off"
+          placeholder={tr("message")}
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); }}
+          disabled={closed}
+        />
+        <button className="ecw-send" type="submit" disabled={closed || draft.trim() === "" || sending} aria-label={sending ? tr("sending") : tr("send")}>
+          {sending ? <span className="ecw-sr-only">{tr("sending")}</span> : <SendIcon />}
+        </button>
+      </form>
+    </>
+  );
+}
+
+export function ChatWidget(props: ChatWidgetProps): ReactElement {
+  const { endpoint, locale, welcome, projectName, realtime, labels } = props;
+  const accentColor = props.accentColor ?? DEFAULT_ACCENT;
+
+  const tr = useCallback((key: WidgetKey): string => t(locale, key, labels), [locale, labels]);
+  const { state, closePanel, togglePanel, submitForm, sendMessage, retryMessage } =
+    useChat({ endpoint, realtime });
+
+  const bubbleRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    injectWidgetStyles();
+  }, []);
+
+  // Foco no primeiro campo ao abrir (form ou composer).
+  useEffect(() => {
+    if (state.open) firstFieldRef.current?.focus();
+  }, [state.open, state.phase]);
+
+  // ESC fecha o painel e devolve o foco ao balão.
+  useEffect(() => {
+    if (!state.open) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      closePanel();
+      bubbleRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [state.open, closePanel]);
+
+  // Auto-scroll para a mensagem mais recente.
+  useEffect(() => {
+    const list = listRef.current;
+    if (list !== null) list.scrollTop = list.scrollHeight;
+  }, [state.messages, state.open]);
+
+  const handleClose = useCallback((): void => {
+    closePanel();
+    bubbleRef.current?.focus();
+  }, [closePanel]);
+
+  const bubbleLabel = state.unread > 0 ? `${tr("openChat")} (${state.unread})` : tr("openChat");
+
+  return (
+    <div className="ecw-root" style={{ "--ecw-accent": accentColor } as CSSProperties}>
+      <button
+        ref={bubbleRef}
+        type="button"
+        className="ecw-button"
+        aria-label={bubbleLabel}
+        aria-expanded={state.open}
+        aria-haspopup="dialog"
+        onClick={togglePanel}
+      >
+        <ChatIcon />
+        {state.unread > 0 && <span className="ecw-badge">{state.unread}</span>}
+      </button>
+
+      {state.open && (
+        <section className="ecw-panel" role="dialog" aria-label="Chat">
+          <header className="ecw-header">
+            <span className="ecw-title">{projectName}</span>
+            {state.session !== null && <span className="ecw-code">#{state.session.code}</span>}
+            <button type="button" className="ecw-close" aria-label={tr("close")} onClick={handleClose}>
+              <span aria-hidden="true">×</span>
+            </button>
+          </header>
+
+          {state.phase === "chat" ? (
+            <ChatPanel
+              messages={state.messages}
+              closed={state.session?.status === "closed"}
+              sending={state.sending}
+              locale={locale}
+              tr={tr}
+              listRef={listRef}
+              firstFieldRef={firstFieldRef}
+              onSend={sendMessage}
+              onRetry={retryMessage}
+            />
+          ) : (
+            <PreChatForm
+              welcome={welcome}
+              tr={tr}
+              error={state.error}
+              sending={state.sending}
+              firstFieldRef={firstFieldRef}
+              onSubmit={submitForm}
+            />
+          )}
+
+          <footer className="ecw-footer">{`${tr("poweredBy")} Evolution Chat`}</footer>
+        </section>
+      )}
+    </div>
+  );
+}
