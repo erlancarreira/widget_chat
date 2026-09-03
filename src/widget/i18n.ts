@@ -1,6 +1,6 @@
 // src/widget/i18n.ts — dicionários do widget (pt/en/es) + helper `t`.
 //
-// Contrato (Task 9): as 14 chaves abaixo são OBRIGATÓRIAS em todos os idiomas — o tipo
+// Contrato (Task 9): as 15 chaves abaixo são OBRIGATÓRIAS em todos os idiomas — o tipo
 // `WidgetDictionary = Record<WidgetKey, string>` torna a paridade verificável pelo
 // compilador, e o teste em test/widget/widget.test.tsx a pinar em runtime.
 //
@@ -23,6 +23,7 @@ export const WIDGET_KEYS = [
   "sendError",
   "retry",
   "sessionClosed",
+  "newConversation",
   "poweredBy",
 ] as const;
 
@@ -45,6 +46,7 @@ export const pt: WidgetDictionary = {
   sendError: "Não foi possível enviar. Tente novamente.",
   retry: "Tentar novamente",
   sessionClosed: "Esta conversa foi encerrada. Abra uma nova para continuar.",
+  newConversation: "Iniciar nova conversa",
   poweredBy: "Powered by",
 };
 
@@ -62,6 +64,7 @@ export const en: WidgetDictionary = {
   sendError: "Couldn't send. Please try again.",
   retry: "Try again",
   sessionClosed: "This conversation was closed. Start a new one to continue.",
+  newConversation: "Start a new conversation",
   poweredBy: "Powered by",
 };
 
@@ -79,6 +82,7 @@ export const es: WidgetDictionary = {
   sendError: "No se pudo enviar. Inténtalo de nuevo.",
   retry: "Reintentar",
   sessionClosed: "Esta conversación fue cerrada. Abre una nueva para continuar.",
+  newConversation: "Iniciar nueva conversación",
   poweredBy: "Powered by",
 };
 

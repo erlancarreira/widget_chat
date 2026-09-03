@@ -11,7 +11,9 @@
 //  (b) msg via realtime.subscribe com painel fechado → badge +1;
 //  (c) fallback: onStatus("closed") → polling ~5s e msg nova aparece;
 //  (d) honeypot preenchido → nenhum POST /api/chat;
-//  (e) ESC fecha o painel e devolve o foco ao balão.
+//  (e) ESC fecha o painel e devolve o foco ao balão;
+//  (f) sessão "closed"/"failed" → composer desabilitado + botão "nova conversa" que
+//      limpa o storage e volta ao pré-chat form (sessão "active" continua compondo).
 // Mais: paridade de chaves i18n e limpeza do storage em 404.
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -20,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWidget } from "../../src/widget/chat-widget";
 import { WIDGET_KEYS, en, es, pt } from "../../src/widget/i18n";
 import type { RealtimeHandle } from "../../src/bridge/types";
-import type { ChatEvent, ChatMessage } from "../../src/types";
+import type { ChatEvent, ChatMessage, ChatSessionStatus } from "../../src/types";
 
 // ─── fakes ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,7 @@ interface Responder {
  */
 function createFetchMock(respond: (url: URL, call: FetchCall) => Responder) {
   const calls: FetchCall[] = [];
+  let handler = respond;
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://widget.test");
     const call: FetchCall = {
@@ -100,14 +103,21 @@ function createFetchMock(respond: (url: URL, call: FetchCall) => Responder) {
       body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
     };
     calls.push(call);
-    const res = respond(url, call);
+    const res = handler(url, call);
     return {
       status: res.status,
       ok: res.status >= 200 && res.status < 300,
       json: async () => res.json,
     } as unknown as Response;
   });
-  return { fn, calls };
+  return {
+    fn,
+    calls,
+    /** Troca o handler em um teste específico sem recriar o mock (o widget guarda `fetch` por chamada). */
+    setResponder(next: (url: URL, call: FetchCall) => Responder): void {
+      handler = next;
+    },
+  };
 }
 
 // Respostas padrão do servidor nos testes.
@@ -135,6 +145,19 @@ function defaultResponder(url: URL, call: FetchCall): Responder {
       session: { code: "A3F2", status: "active", realtimeToken: RT_TOKEN, visitorName: String(call.body?.["name"] ?? "") },
       messages: [msg("m-start", "visitor", String(call.body?.["message"] ?? ""), "sent")],
     },
+  };
+}
+
+/** GET devolve a sessão com `status` dado (o resto do contrato é o padrão). */
+function sessionResponder(status: ChatSessionStatus): (url: URL, call: FetchCall) => Responder {
+  return (url, call) => {
+    if (call.method === "GET") {
+      return {
+        status: 200,
+        json: { session: { code: "A3F2", status, visitorName: "João" }, messages: [HISTORY_MSG] },
+      };
+    }
+    return defaultResponder(url, call);
   };
 }
 
@@ -223,7 +246,7 @@ describe("i18n", () => {
     const required = [
       "openChat", "close", "name", "phone", "message", "send", "sending",
       "welcomeNotice", "privacyNote", "invalidPhone", "sendError", "retry",
-      "sessionClosed", "poweredBy",
+      "sessionClosed", "newConversation", "poweredBy",
     ] as const;
     for (const key of required) {
       expect(WIDGET_KEYS).toContain(key);
@@ -431,6 +454,67 @@ describe("fallback de transporte", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /abrir chat/i }));
     expect(screen.getByLabelText(/nome/i)).toBeInTheDocument();
+  });
+});
+
+// ─── sessão encerrada / falha ─────────────────────────────────────────────────
+
+/** Copy pt esperada no botão (a paridade dos dicionários é checada no bloco i18n). */
+const NEW_CONVERSATION_LABEL = "Iniciar nova conversa";
+
+/** Restaura sessão persistida com `status` (via GET do boot) e abre o painel. */
+async function openRestoredSession(status: ChatSessionStatus): Promise<FakeRealtime> {
+  const rt = createFakeRealtime();
+  window.localStorage.setItem("ecw:session", JSON.stringify({ token: "t-restore", code: "A3F2" }));
+  fetchMock.setResponder(sessionResponder(status));
+  renderWidget(rt);
+  await waitFor(() => expect(rt.subscribed).toContain("t-restore"));
+  fireEvent.click(screen.getByRole("button", { name: /abrir chat/i }));
+  return rt;
+}
+
+describe("sessão encerrada ou falha", () => {
+  it("sessão 'closed' → composer desabilitado, aviso e botão de nova conversa", async () => {
+    await openRestoredSession("closed");
+
+    expect(screen.getByText(pt.sessionClosed)).toBeInTheDocument();
+    expect(screen.getByLabelText(/mensagem/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: NEW_CONVERSATION_LABEL })).toBeInTheDocument();
+  });
+
+  it("botão de nova conversa limpa ecw:session e volta ao pré-chat form", async () => {
+    const rt = await openRestoredSession("closed");
+
+    fireEvent.click(screen.getByRole("button", { name: NEW_CONVERSATION_LABEL }));
+
+    await waitFor(() => expect(window.localStorage.getItem("ecw:session")).toBeNull());
+    // canal realtime da sessão morta desassinado
+    await waitFor(() => expect(rt.unsubscribed).toContain("t-restore"));
+
+    // pré-chat form de novo, com campos vazios e sem o aviso
+    const name = screen.getByLabelText(/nome/i) as HTMLInputElement;
+    const phone = screen.getByLabelText(/whatsapp/i) as HTMLInputElement;
+    const message = screen.getByLabelText(/mensagem/i) as HTMLTextAreaElement;
+    expect(name.value).toBe("");
+    expect(phone.value).toBe("");
+    expect(message.tagName).toBe("TEXTAREA");
+    expect(message.value).toBe("");
+    expect(screen.queryByText(pt.sessionClosed)).toBeNull();
+  });
+
+  it("sessão 'failed' → composer desabilitado + botão de nova conversa", async () => {
+    await openRestoredSession("failed");
+
+    expect(screen.getByLabelText(/mensagem/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: NEW_CONVERSATION_LABEL })).toBeInTheDocument();
+  });
+
+  it("sessão 'active' → composer habilitado e nenhum botão de nova conversa", async () => {
+    await openRestoredSession("active");
+
+    expect(screen.getByLabelText(/mensagem/i)).toBeEnabled();
+    expect(screen.queryByRole("button", { name: NEW_CONVERSATION_LABEL })).toBeNull();
+    expect(screen.queryByText(pt.sessionClosed)).toBeNull();
   });
 });
 

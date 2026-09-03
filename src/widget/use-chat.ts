@@ -2,7 +2,8 @@
 //
 // Fases: "idle" (painel nunca aberto, sem sessão) → "form" (pré-chat) → "chat" (sessão
 // ativa). A transição idle→form acontece na primeira abertura; form→chat no POST bem
-// sucedido; qualquer fase→form quando o GET devolve 404 (sessão expirada → storage limpo).
+// sucedido; qualquer fase→form quando o GET devolve 404 (sessão expirada → storage limpo)
+// ou quando o visitante pede "nova conversa" numa sessão closed/failed (`startNewConversation`).
 //
 // Tempo real (Strategy, invisível ao usuário): com token em mãos, `realtime.subscribe`
 // anexa eventos; se o transporte cair (`onStatus("closed")`), o hook liga um POLLING de
@@ -258,6 +259,8 @@ export interface UseChatResult {
   submitForm(input: { name: string; phone: string; message: string; honeypot: string }): Promise<void>;
   sendMessage(text: string): Promise<void>;
   retryMessage(id: string): Promise<void>;
+  /** Descarta a sessão encerrada/falha (storage + estado) e volta ao pré-chat form. */
+  startNewConversation(): void;
 }
 
 let tmpSeq = 0;
@@ -458,6 +461,14 @@ export function useChat({ endpoint, realtime }: UseChatOptions): UseChatResult {
     [postMessage],
   );
 
+  // Sessão closed/failed: o visitante resolve o beco sem saída pedindo uma conversa nova.
+  // Limpa o storage (senão o próximo boot restauraria a mesma sessão morta) e volta ao
+  // form; a assinatura realtime cai sozinha na limpeza do efeito, porque token → null.
+  const startNewConversation = useCallback((): void => {
+    clearStoredSession();
+    dispatch({ type: "reset-form" });
+  }, []);
+
   const submitForm = useCallback(
     async ({ name, phone, message, honeypot }: { name: string; phone: string; message: string; honeypot: string }): Promise<void> => {
       // Anti-bot silencioso: honeypot preenchido → nada sai do navegador (o servidor
@@ -508,5 +519,5 @@ export function useChat({ endpoint, realtime }: UseChatOptions): UseChatResult {
     [endpoint],
   );
 
-  return { state, openPanel, closePanel, togglePanel, submitForm, sendMessage, retryMessage };
+  return { state, openPanel, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation };
 }

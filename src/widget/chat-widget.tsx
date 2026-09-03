@@ -10,6 +10,8 @@
 //    ESC fecha e devolve o foco ao balão; clique fora NÃO fecha (mobile-friendly);
 //  - todo input tem <label htmlFor> (useId → múltiplas instâncias sem colisão);
 //  - badge de não lidas refletido no nome acessível do balão;
+//  - sessão closed/failed: composer desabilitado, aviso em role="status" e botão real
+//    "nova conversa" (o beco sem saída tem saída acessível por teclado);
 //  - prefers-reduced-motion desliga animações (via CSS).
 
 import {
@@ -73,7 +75,7 @@ function formatTime(iso: string, locale: WidgetLocale): string {
 
 function StatusMark({ status }: { status: ChatMessage["status"] }): ReactElement {
   // ✓ = aceita pelo servidor (pending), ✓✓ = enviada, ⚠ = falhou.
-  // Decorativo por design: o conjunto de chaves i18n é fixo (14) e o estado "failed" já
+  // Decorativo por design: o conjunto de chaves i18n é fixo (15) e o estado "failed" já
   // é anunciado de forma acessível pelo botão visível `retry` ao lado — um texto sr-only
   // reaproveitando "send"/"sending" soaria a ruído para quem usa leitor de tela.
   const glyph = status === "pending" ? "✓" : status === "sent" ? "✓✓" : "⚠";
@@ -192,7 +194,8 @@ function PreChatForm({ welcome, tr, error, sending, firstFieldRef, onSubmit }: F
 
 interface ChatPanelProps {
   messages: ChatMessage[];
-  closed: boolean;
+  /** Só `status === "active"` compõe; closed/failed mostram aviso + "nova conversa". */
+  canCompose: boolean;
   sending: boolean;
   locale: WidgetLocale;
   tr: (k: WidgetKey) => string;
@@ -200,16 +203,17 @@ interface ChatPanelProps {
   firstFieldRef: RefObject<HTMLInputElement>;
   onSend(text: string): Promise<void>;
   onRetry(id: string): Promise<void>;
+  onNewConversation(): void;
 }
 
-function ChatPanel({ messages, closed, sending, locale, tr, listRef, firstFieldRef, onSend, onRetry }: ChatPanelProps): ReactElement {
+function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
   const uid = useId();
   const [draft, setDraft] = useState("");
 
   const submit = (e: FormEvent): void => {
     e.preventDefault();
     const text = draft.trim();
-    if (text === "" || closed) return;
+    if (text === "" || !canCompose) return;
     setDraft("");
     void onSend(text);
   };
@@ -232,7 +236,14 @@ function ChatPanel({ messages, closed, sending, locale, tr, listRef, firstFieldR
           </li>
         ))}
       </ul>
-      {closed && <p className="ecw-notice" role="status">{tr("sessionClosed")}</p>}
+      {!canCompose && (
+        <div className="ecw-closed">
+          <p className="ecw-notice" role="status">{tr("sessionClosed")}</p>
+          <button type="button" className="ecw-submit" onClick={onNewConversation}>
+            {tr("newConversation")}
+          </button>
+        </div>
+      )}
       <form className="ecw-composer" onSubmit={submit}>
         <label className="ecw-sr-only" htmlFor={`${uid}-input`}>{tr("message")}</label>
         <input
@@ -244,9 +255,9 @@ function ChatPanel({ messages, closed, sending, locale, tr, listRef, firstFieldR
           placeholder={tr("message")}
           value={draft}
           onChange={(e) => { setDraft(e.target.value); }}
-          disabled={closed}
+          disabled={!canCompose}
         />
-        <button className="ecw-send" type="submit" disabled={closed || draft.trim() === "" || sending} aria-label={sending ? tr("sending") : tr("send")}>
+        <button className="ecw-send" type="submit" disabled={!canCompose || draft.trim() === "" || sending} aria-label={sending ? tr("sending") : tr("send")}>
           {sending ? <span className="ecw-sr-only">{tr("sending")}</span> : <SendIcon />}
         </button>
       </form>
@@ -259,7 +270,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
   const accentColor = props.accentColor ?? DEFAULT_ACCENT;
 
   const tr = useCallback((key: WidgetKey): string => t(locale, key, labels), [locale, labels]);
-  const { state, closePanel, togglePanel, submitForm, sendMessage, retryMessage } =
+  const { state, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation } =
     useChat({ endpoint, realtime });
 
   const bubbleRef = useRef<HTMLButtonElement>(null);
@@ -300,6 +311,10 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
     bubbleRef.current?.focus();
   }, [closePanel]);
 
+  // Só uma sessão "active" aceita mensagem; "closed"/"failed" mostram o aviso com a ação
+  // de nova conversa (que limpa o storage e devolve o visitante ao pré-chat form).
+  const canCompose = state.session?.status === "active";
+
   const bubbleLabel = state.unread > 0 ? `${tr("openChat")} (${state.unread})` : tr("openChat");
 
   return (
@@ -330,7 +345,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
           {state.phase === "chat" ? (
             <ChatPanel
               messages={state.messages}
-              closed={state.session?.status === "closed"}
+              canCompose={canCompose}
               sending={state.sending}
               locale={locale}
               tr={tr}
@@ -338,6 +353,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
               firstFieldRef={firstFieldRef}
               onSend={sendMessage}
               onRetry={retryMessage}
+              onNewConversation={startNewConversation}
             />
           ) : (
             <PreChatForm

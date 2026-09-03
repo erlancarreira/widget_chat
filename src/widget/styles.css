@@ -225,6 +225,9 @@
 .ecw-send:disabled { opacity: 0.55; cursor: not-allowed; }
 .ecw-send svg { width: 18px; height: 18px; }
 
+/* ── sessão encerrada / falha ────────────────────────────────────────────── */
+.ecw-closed { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ecw-border); background: var(--ecw-surface); }
+
 .ecw-footer { padding: 6px 12px 10px; font-size: 11px; color: var(--ecw-muted); text-align: center; background: var(--ecw-surface); }
 
 /* ── utilitários ─────────────────────────────────────────────────────────── */
