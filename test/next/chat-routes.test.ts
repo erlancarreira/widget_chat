@@ -12,6 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { ChatBridge } from "../../src/bridge/bridge";
+import { ChatError } from "../../src/errors";
 import { createChatRoutes, createWebhookRoute } from "../../src/next/chat-routes";
 import type { ChatRoutesDeps } from "../../src/next/chat-routes";
 import type { EvolutionClient, CreateGroupResult, SendTextResult } from "../../src/api/client";
@@ -462,5 +463,96 @@ describe("contrato das fábricas", () => {
   it("createWebhookRoute devolve {POST}", () => {
     const { webhook } = setup();
     expect(typeof webhook.POST).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mapeamento code → HTTP por DUCK-TYPE (bug cross-bundle do tsup)
+// ---------------------------------------------------------------------------
+
+describe("mapeamento code→HTTP sem instanceof ChatError", () => {
+  // Réplica exata do que o tsup produz em produção: o entry /bridge embute a SUA cópia de
+  // ChatError, então o objeto que chega na rota /next NÃO passa em `instanceof ChatError`.
+  // Se algum dia o mapeamento voltar a usar instanceof, estes testes falham.
+  function foreignChatError(message: string, code: string): Error {
+    const error = new Error(message);
+    error.name = "ChatError";
+    Object.defineProperty(error, "code", { value: code });
+    expect(error instanceof ChatError).toBe(false); // premissa do teste
+    return error;
+  }
+
+  const CASES: { code: string; message: string; status: number; error: string; field?: string }[] = [
+    { code: "invalid_input", message: "Nome deve ter entre 2 e 60 caracteres", status: 422, error: "Nome deve ter entre 2 e 60 caracteres", field: "name" },
+    { code: "invalid_input", message: "Telefone inválido", status: 422, error: "Telefone inválido", field: "phone" },
+    { code: "invalid_input", message: "JSON inválido", status: 422, error: "JSON inválido" },
+    { code: "rate_limited", message: "Limite de sessões atingido", status: 429, error: "Limite de sessões atingido" },
+    { code: "session_not_found", message: "Sessão não encontrada", status: 404, error: "Sessão não encontrada" },
+    { code: "session_closed", message: "Sessão encerrada", status: 409, error: "Sessão encerrada" },
+    { code: "group_create_failed", message: "Falha ao criar o grupo na Evolution", status: 502, error: "Falha ao criar o grupo na Evolution" },
+    { code: "send_failed", message: "Falha ao enviar a primeira mensagem para o grupo", status: 502, error: "Falha ao enviar a primeira mensagem para o grupo" },
+    { code: "store_error", message: "Chat não configurado", status: 502, error: "Chat não configurado" },
+    { code: "disabled", message: "Chat desabilitado", status: 404, error: "not_found" },
+  ];
+
+  it.each(CASES)(
+    "bridge lança code=$code (cópia estrangeira) → $status sem degradar p/ 500",
+    async ({ code, message, status, error, field }) => {
+      const { routes, bridge } = setup();
+      vi.spyOn(bridge, "startChat").mockRejectedValue(foreignChatError(message, code));
+
+      const res = await routes.POST(postJson("/api/chat", VALID_START));
+
+      expect(res.status).toBe(status);
+      const body = await jsonOf(res);
+      expect(body["error"]).toBe(error);
+      if (field === undefined) expect("field" in body).toBe(false);
+      else expect(body["field"]).toBe(field);
+    },
+  );
+
+  it("plain object {code} sem message → status correto com code no corpo (erro serializado)", async () => {
+    const { routes, bridge } = setup();
+    vi.spyOn(bridge, "startChat").mockRejectedValue({ code: "session_closed" } as never);
+
+    const res = await routes.POST(postJson("/api/chat", VALID_START));
+
+    expect(res.status).toBe(409);
+    expect(await jsonOf(res)).toEqual({ error: "session_closed" });
+  });
+
+  it("erro sem code (Error puro) → 500 genérico, sem vazar a mensagem", async () => {
+    const { routes, bridge } = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(bridge, "startChat").mockRejectedValue(new Error("detalhe interno sigiloso"));
+
+    const res = await routes.POST(postJson("/api/chat", VALID_START));
+
+    expect(res.status).toBe(500);
+    expect(await jsonOf(res)).toEqual({ error: "erro interno" });
+    expect(log).toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it("code desconhecido → 500 genérico (não inventa status p/ code fora do contrato)", async () => {
+    const { routes, bridge } = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(bridge, "startChat").mockRejectedValue(foreignChatError("boom", "algum_code_novo"));
+
+    const res = await routes.POST(postJson("/api/chat", VALID_START));
+
+    expect(res.status).toBe(500);
+    expect(await jsonOf(res)).toEqual({ error: "erro interno" });
+    log.mockRestore();
+  });
+
+  it("ChatError LOCAL ainda mapeia igual (a classe continua funcionando na rota)", async () => {
+    const { routes, bridge } = setup();
+    vi.spyOn(bridge, "startChat").mockRejectedValue(new ChatError("Sessão encerrada", "session_closed"));
+
+    const res = await routes.POST(postJson("/api/chat", VALID_START));
+
+    expect(res.status).toBe(409);
+    expect(await jsonOf(res)).toEqual({ error: "Sessão encerrada" });
   });
 });

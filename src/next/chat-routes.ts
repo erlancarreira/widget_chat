@@ -20,7 +20,14 @@
 //   invalid_input → 422 {error, field?}   rate_limited → 429 {error}
 //   session_not_found → 404               session_closed → 409
 //   group_create_failed / send_failed → 502 {error}
-//   store_error → 500                     inesperado → 500 (log server-side)
+//   store_error → 502                     inesperado → 500 (log server-side)
+//
+// O mapeamento lê o `code` por DUCK-TYPING, nunca por `instanceof ChatError`. Motivo:
+// o tsup emite uma cópia própria de `ChatError` em CADA bundle de entry (sem shared
+// chunks), então a classe que vive no bundle /bridge NÃO é a mesma do bundle /next —
+// um ChatError lançado pela bridge falha o `instanceof` na rota e degradava para 500.
+// Qualquer objeto `{ code, message }` (esta classe, outra cópia dela, ou um erro
+// serializado) produz o status correto. Ver statusForError().
 //
 // Segurança: as respostas NUNCA devolvem a sessão completa — só os campos que o widget
 // precisa (code/status/visitorName/realtimeToken). Telefone do visitante e groupJid não
@@ -98,34 +105,66 @@ function fieldFromMessage(message: string): string | null {
   return label === undefined ? null : FIELD_BY_LABEL[label] ?? null;
 }
 
-function errorResponse(error: unknown): Response {
-  if (error instanceof ChatError) {
-    switch (error.code) {
-      case "invalid_input": {
-        const body: Record<string, unknown> = { error: error.message };
-        const field = fieldFromMessage(error.message);
-        if (field !== null) body["field"] = field;
-        return json(422, body);
-      }
-      case "rate_limited":
-        return json(429, { error: error.message });
-      case "session_not_found":
-        return json(404, { error: error.message });
-      case "session_closed":
-        return json(409, { error: error.message });
-      case "group_create_failed":
-      case "send_failed":
-        return json(502, { error: error.message });
-      case "disabled":
-        return json(404, { error: "not_found" });
-      case "unauthorized":
-        return json(401, { error: error.message });
-      case "store_error":
-        return json(500, { error: error.message });
+interface StatusForError {
+  status: number;
+  error: string;
+  field?: string;
+}
+
+// DUCK-TYPE (ver cabeçalho do arquivo): o `code` é lido por propriedade, nunca por
+// `instanceof ChatError` — a classe é duplicada nos bundles do tsup e a comparação de
+// identidade falharia entre /bridge e /next. Erro sem `code` reconhecível → 500.
+function statusForError(err: unknown): StatusForError {
+  const code =
+    typeof err === "object" && err !== null && "code" in err
+      ? (err as { code?: unknown }).code
+      : undefined;
+  const message =
+    typeof err === "object" && err !== null && typeof (err as { message?: unknown }).message === "string"
+      ? (err as { message: string }).message
+      : "";
+  // Objeto duck-typed sem `message` (erro serializado, plain object) ainda responde com o
+  // próprio code no corpo — nunca uma string vazia que o widget não conseguiria exibir.
+  const text = message !== "" || typeof code !== "string" ? message : code;
+
+  switch (code) {
+    case "invalid_input": {
+      const field = fieldFromMessage(text);
+      return field === null
+        ? { status: 422, error: text }
+        : { status: 422, error: text, field };
     }
+    case "rate_limited":
+      return { status: 429, error: text };
+    case "session_not_found":
+      return { status: 404, error: text };
+    case "session_closed":
+      return { status: 409, error: text };
+    case "group_create_failed":
+    case "send_failed":
+      return { status: 502, error: text };
+    case "disabled":
+      return { status: 404, error: "not_found" };
+    case "unauthorized":
+      return { status: 401, error: text };
+    case "store_error":
+      return { status: 502, error: text };
+    default:
+      return { status: 500, error: "erro interno" };
   }
-  console.error("[evolution-chat] erro inesperado na rota:", error);
-  return json(500, { error: "erro interno" });
+}
+
+function errorResponse(error: unknown): Response {
+  const { status, error: message, field } = statusForError(error);
+  // 500 só sai do ramo default (nenhum code mapeado responde 500) → é sempre inesperado,
+  // e o detalhe fica apenas no log do servidor: o corpo nunca vaza a mensagem original.
+  if (status === 500) {
+    console.error("[evolution-chat] erro inesperado na rota:", error);
+    return json(500, { error: message });
+  }
+  const body: Record<string, unknown> = { error: message };
+  if (field !== undefined) body["field"] = field;
+  return json(status, body);
 }
 
 export function createChatRoutes(deps: ChatRoutesDeps): ChatRoutes {
