@@ -195,6 +195,22 @@ export class ChatBridge {
       }
     }
 
+    // Porta de entrada do número: um telefone que não existe no WhatsApp criaria um
+    // grupo onde a plataforma fala sozinha — o site "funciona", a sessão fica ativa e
+    // o visitante nunca recebe nada no WhatsApp. Valida via Evolution (onWhatsApp).
+    // Degradacão: se o CHECADOR falhar (endpoint ausente/erro de rede/shape estranho),
+    // o atendimento segue como antes — a validação nunca pode derrubar o próprio chat.
+    try {
+      const checks = await this.deps.client.validateWhatsAppNumbers(cfg.instance, [phone]);
+      if (checks[0]?.exists === false) {
+        // Começa com "Telefone" para a rota mapear field:"phone" (422) e o widget destacar.
+        throw new ChatError("Telefone sem WhatsApp: confira o número digitado (com DDD).", "invalid_input");
+      }
+    } catch (error) {
+      if (error instanceof ChatError) throw error;
+      console.warn("[evolution-chat] validação de número indisponível (seguindo sem validar):", error);
+    }
+
     const code = generateSessionCode();
     const visitorJid = toWhatsappJid(phone);
     const platformJid = toWhatsappJid(normalizePhone(cfg.platformNumber));

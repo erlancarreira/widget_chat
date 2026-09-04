@@ -93,6 +93,40 @@ describe("createEvolutionClient", () => {
     });
   });
 
+  it("validateWhatsAppNumbers envia { numbers } e mapeia [{ exists, jid }] na ordem", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      ok([
+        { exists: true, jid: "5511999998888@s.whatsapp.net", number: "5511999998888" },
+        { exists: false, jid: "5511999997777@s.whatsapp.net", number: "5511999997777" },
+      ]),
+    );
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    const r = await client.validateWhatsAppNumbers("inst", ["5511999998888", "5511999997777"]);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://evo.test/chat/whatsappNumbers/inst");
+    expect(JSON.parse(String(init.body))).toEqual({ numbers: ["5511999998888", "5511999997777"] });
+    expect(r).toEqual([
+      { exists: true, jid: "5511999998888@s.whatsapp.net" },
+      { exists: false, jid: "5511999997777@s.whatsapp.net" },
+    ]);
+  });
+
+  it("validateWhatsAppNumbers aceita envelope { response: [...] } e rejeita shape estranho", async () => {
+    const fetchEnvelope = vi.fn().mockResolvedValue(
+      ok({ response: [{ exists: true, jid: "5511@s.whatsapp.net" }] }),
+    );
+    const clientEnvelope = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl: fetchEnvelope });
+    await expect(clientEnvelope.validateWhatsAppNumbers("inst", ["5511"])).resolves.toEqual([
+      { exists: true, jid: "5511@s.whatsapp.net" },
+    ]);
+
+    const fetchGarbage = vi.fn().mockResolvedValue(ok({ unexpected: true }));
+    const clientGarbage = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl: fetchGarbage });
+    await expect(clientGarbage.validateWhatsAppNumbers("inst", ["5511"])).rejects.toBeInstanceOf(
+      EvolutionApiError,
+    );
+  });
+
   it("leaveGroup faz DELETE /group/leave/{instance} com body { groupId }", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(ok({}));
     const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });

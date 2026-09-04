@@ -9,6 +9,15 @@ export interface CreateGroupResult { groupJid: string; }
 
 export interface EvolutionClient {
   sendText(instance: string, number: string, text: string): Promise<SendTextResult>;
+  /**
+   * Verifica se os números existem no WhatsApp (Baileys onWhatsApp via REST).
+   * Evolution v2: POST /chat/whatsappNumbers/{instance}, body { numbers } — a resposta
+   * vem na MESMA ordem dos números pedidos. Falha de shape vira EvolutionApiError.
+   */
+  validateWhatsAppNumbers(
+    instance: string,
+    numbers: string[],
+  ): Promise<Array<{ exists: boolean; jid: string | null }>>;
   /** Envia presença de digitação ("digitando…") para o número/grupo. `presence` =
    *  "composing" | "recording" (digitando) ou "paused" (parou). Best-effort: a
    *  presença é anunciada pela CONTA CONECTADA à instância, não por terceiros. */
@@ -116,6 +125,29 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
     async sendText(instance, number, text) {
       const res = await requestJson("sendText", "POST", `/message/sendText/${instance}`, { number, text });
       return { waMessageId: requireString(res, "key", "id") };
+    },
+
+    async validateWhatsAppNumbers(instance, numbers) {
+      const res = await requestJson(
+        "validateWhatsAppNumbers",
+        "POST",
+        `/chat/whatsappNumbers/${instance}`,
+        { numbers },
+      );
+      // Algumas builds embrulham em { response: [...] }; a maioria devolve o array puro.
+      const raw = Array.isArray(res.json)
+        ? res.json
+        : Array.isArray(res.json["response"])
+          ? (res.json["response"] as unknown[])
+          : null;
+      if (raw === null) throw new EvolutionApiError(res.status, res.text, res.operation);
+      return raw.map((item) => {
+        const rec = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+        return {
+          exists: rec["exists"] === true,
+          jid: typeof rec["jid"] === "string" ? rec["jid"] : null,
+        };
+      });
     },
 
     async sendPresence(instance, number, presence) {

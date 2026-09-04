@@ -167,6 +167,12 @@ chega apenas no GET (reabrir o painel ou o polling de fallback).
   O parser normaliza pelo `phoneNumber` (JID real de telefone); com JIDs `@lid` a comparação de
   telefone não é confiável, então **qualquer `leave`/`remove` no grupo encerra a sessão** (fail-safe:
   no pior caso o visitante reabre uma conversa nova — nunca fica sessão zumbi aceitando envios).
+- **Validação do número na entrada:** antes de criar o grupo, `startChat` consulta a Evolution
+  (`POST /chat/whatsappNumbers/{instance}`, Baileys onWhatsApp). Número que **não existe no
+  WhatsApp** → `ChatError("invalid_input")` com mensagem começando em "Telefone" (a rota devolve
+  422 com `field: "phone"` e o widget destaca o campo) — sem grupo órfão, sem sessão zumbi.
+  Se o checador estiver indisponível (endpoint ausente, erro de rede, shape estranho), o chat
+  **segue normalmente** (degradação): a validação nunca é ponto único de falha do atendimento.
 - **Falhas transitórias não encerram atendimento:** retransmissão única em falha de rede (conexão
   caiu antes de qualquer resposta) no client; erros 5xx da Evolution marcam a mensagem como `failed`
   mas **não** fecham a sessão — só 404/410 (destino definitivamente inexistente) ou texto de grupo

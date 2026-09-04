@@ -46,6 +46,10 @@ function config(over: Partial<ChatConfig> = {}): ChatConfig {
 interface ClientOverrides {
   sendText?: (instance: string, number: string, text: string) => Promise<SendTextResult>;
   createGroup?: (instance: string, subject: string, participants: string[]) => Promise<CreateGroupResult>;
+  validateWhatsAppNumbers?: (
+    instance: string,
+    numbers: string[],
+  ) => Promise<Array<{ exists: boolean; jid: string | null }>>;
 }
 
 function mockClient(over: ClientOverrides = {}) {
@@ -61,6 +65,11 @@ function mockClient(over: ClientOverrides = {}) {
     createGroup,
     setGroupPicture,
     sendPresence: vi.fn(async () => undefined),
+    validateWhatsAppNumbers: vi.fn(
+      over.validateWhatsAppNumbers ??
+        (async (_instance: string, numbers: string[]) =>
+          numbers.map(() => ({ exists: true, jid: null }))),
+    ),
     leaveGroup: vi.fn(async () => undefined),
     getConnectionState: vi.fn(async () => "open" as const),
     connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
@@ -229,6 +238,43 @@ describe("ChatBridge.startChat", () => {
       waMessageId: SENT_WA_ID,
     });
     expect(store.messages).toEqual(result.messages);
+  });
+
+  it("número SEM WhatsApp (exists:false) → invalid_input sem criar grupo/sessão", async () => {
+    const { bridge, store, createGroup, client } = setup({
+      client: {
+        validateWhatsAppNumbers: async () => [{ exists: false, jid: null }],
+      },
+    });
+    await seedSession(store); // sessão de OUTRO visitante não interfere
+
+    const error = await captureError(
+      bridge.startChat({ name: "João", phone: "21999998881", message: "quero comprar" }),
+    );
+
+    expect(error.code).toBe("invalid_input");
+    expect(error.message).toContain("Telefone");
+    expect(createGroup).not.toHaveBeenCalled();
+    expect(client.sendText).not.toHaveBeenCalled();
+    // Nenhuma sessão nova foi persistida (só a seed).
+    expect(store.sessions).toHaveLength(1);
+  });
+
+  it("validador indisponível (endpoint falha) → chat segue normalmente (degradação)", async () => {
+    const { bridge, store, createGroup } = setup({
+      client: {
+        validateWhatsAppNumbers: async () => {
+          throw new EvolutionApiError(404, "not found", "validateWhatsAppNumbers");
+        },
+      },
+    });
+    await seedSession(store);
+
+    // Telefone DIFERENTE da sessão seed: passa pelo caminho de criação (validação roda).
+    const result = await bridge.startChat({ name: "João", phone: "21999997777", message: "quero comprar" });
+
+    expect(result.session.status).toBe("active");
+    expect(createGroup).toHaveBeenCalled();
   });
 
   it("modo direto (createGroup:false): não cria grupo, envia 1:1 p/ plataforma e marca sessão direta", async () => {

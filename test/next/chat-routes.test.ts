@@ -63,6 +63,10 @@ function mockClient(over: ClientOverrides = {}) {
     createGroup,
     setGroupPicture: vi.fn(async () => undefined),
     sendPresence: vi.fn(async () => undefined),
+    validateWhatsAppNumbers: vi.fn(
+      async (_instance: string, numbers: string[]) =>
+        numbers.map(() => ({ exists: true as const, jid: null })),
+    ),
     leaveGroup: vi.fn(async () => undefined),
     getConnectionState: vi.fn(async () => "open" as const),
     connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
