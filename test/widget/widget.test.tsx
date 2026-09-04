@@ -372,7 +372,8 @@ describe("tempo real", () => {
       rt.emit({ type: "message", message: msg("m-rt", "owner", "Mensagem do atendente") });
     });
 
-    expect(screen.getByText("1")).toBeInTheDocument();
+    // mensagem chega após o "digitando…" simulado (delay) → badge aparece em seguida
+    await waitFor(() => expect(screen.getByText("1")).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText("Mensagem do atendente")).toBeNull();
 
     // reabre → mensagem aparece, badge some
@@ -390,7 +391,8 @@ describe("tempo real", () => {
     act(() => {
       rt.emit({ type: "message", message: msg("m-rt2", "owner", "Olá, João!") });
     });
-    expect(screen.getByText("Olá, João!")).toBeInTheDocument();
+    // mensagem recebida aparece após o "digitando…" simulado (delay)
+    await waitFor(() => expect(screen.getByText("Olá, João!")).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText("1")).toBeNull();
   });
 });

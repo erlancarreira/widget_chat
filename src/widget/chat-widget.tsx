@@ -87,10 +87,11 @@ function StatusMark({ status }: { status: ChatMessage["status"] }): ReactElement
   );
 }
 
-/** "3 pontinhos" de digitação: bolha com três pontos animados + rótulo acessível. */
-function TypingIndicator({ label }: { label: string }): ReactElement {
+/** "3 pontinhos" de digitação: bolha com três pontos animados + rótulo acessível.
+ *  `from` alinha o indicador ao lado de quem representa (owner→esquerda, visitor→direita). */
+function TypingIndicator({ from, label }: { from: "owner" | "visitor"; label: string }): ReactElement {
   return (
-    <li className="ecw-item ecw-item--owner" aria-live="polite">
+    <li className={`ecw-item ecw-item--${from}`} aria-live="polite">
       <div className="ecw-typing" role="status" aria-label={label}>
         <span className="ecw-typing-dot" />
         <span className="ecw-typing-dot" />
@@ -218,6 +219,8 @@ interface ChatPanelProps {
   firstFieldRef: RefObject<HTMLInputElement>;
   /** True enquanto a dona da plataforma (atendente) digita → mostra os "3 pontinhos". */
   ownerTyping: boolean;
+  /** True enquanto o VISITANTE (esta ponta) digita → "3 pontinhos" do lado do visitante. */
+  visitorTyping: boolean;
   /** Avisa o servidor que o visitante está/parou de digitar. Best-effort. */
   onTyping(isTyping: boolean): Promise<void>;
   onSend(text: string): Promise<void>;
@@ -225,7 +228,7 @@ interface ChatPanelProps {
   onNewConversation(): void;
 }
 
-function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, ownerTyping, onTyping, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
+function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, ownerTyping, visitorTyping, onTyping, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
   const uid = useId();
   const [draft, setDraft] = useState("");
 
@@ -285,7 +288,8 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
             </li>
           ),
         )}
-        {ownerTyping && canCompose && <TypingIndicator label={tr("typing")} />}
+        {ownerTyping && canCompose && <TypingIndicator from="owner" label={tr("typing")} />}
+        {visitorTyping && canCompose && <TypingIndicator from="visitor" label={tr("typing")} />}
       </ul>
       {!canCompose && (
         <div className="ecw-closed">
@@ -355,7 +359,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
   useEffect(() => {
     const list = listRef.current;
     if (list !== null) list.scrollTop = list.scrollHeight;
-  }, [state.messages, state.ownerTyping, state.open]);
+  }, [state.messages, state.ownerTyping, state.visitorTyping, state.open]);
 
   const handleClose = useCallback((): void => {
     closePanel();
@@ -403,6 +407,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
               listRef={listRef}
               firstFieldRef={firstFieldRef}
               ownerTyping={state.ownerTyping}
+              visitorTyping={state.visitorTyping}
               onTyping={notifyTyping}
               onSend={sendMessage}
               onRetry={retryMessage}

@@ -21,6 +21,9 @@ import type { RealtimeHandle } from "../bridge/types";
 export const SESSION_STORAGE_KEY = "ecw:session";
 /** Intervalo do fallback de polling quando o canal realtime fecha (ms). */
 export const POLL_INTERVAL_MS = 5_000;
+/** Faixa (ms) do "digitando…" simulado exibido ANTES de uma mensagem recebida. */
+export const TYPING_PRE_MESSAGE_MIN_MS = 700;
+export const TYPING_PRE_MESSAGE_MAX_MS = 2200;
 /** Mínimo de dígitos (com DDD) para um WhatsApp ser aceito no form. */
 export const MIN_PHONE_DIGITS = 10;
 
@@ -370,7 +373,23 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
 
   const handleEvent = useCallback((e: ChatEvent): void => {
     if (e.type === "message" && e.message !== undefined) {
-      dispatch({ type: "append", message: e.message });
+      const msg = e.message;
+      // Mensagem recebida da DONA (staff): como a instância conectada não emite presença
+      // do próprio "digitando" (Evolution/Baileys), simulamos o "3 pontinhos" antes de
+      // exibir a mensagem — dá o feedback visual de que a outra ponta está respondendo.
+      if (msg.direction === "owner") {
+        dispatch({ type: "typing", from: "owner", isTyping: true });
+        const text = typeof msg.body === "string" ? msg.body : "";
+        const delay = Math.min(
+          TYPING_PRE_MESSAGE_MAX_MS,
+          Math.max(TYPING_PRE_MESSAGE_MIN_MS, text.length * 22),
+        );
+        setTimeout(() => {
+          dispatch({ type: "append", message: msg });
+        }, delay);
+      } else {
+        dispatch({ type: "append", message: msg });
+      }
     } else if (e.type === "session" && e.status !== undefined) {
       dispatch({ type: "session-status", status: e.status });
     } else if (e.type === "typing" && e.from !== undefined) {
