@@ -232,8 +232,11 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
   const uid = useId();
   const [draft, setDraft] = useState("");
 
-  // Debounce do sinal "visitante digitando": a cada tecla avisa true e agenda um false
-  // para 2,5s de inatividade; ao enviar, cancela o timer e avisa false imediatamente.
+  // Sinal "visitante digitando": dispara `true` só na TRANSIÇÃO para digitando (não a
+  // cada tecla) e `false` após 2,5s de inatividade, ao enviar ou ao perder o foco —
+  // evita um POST por caractere. `onChange` já cobre keyup, cola e IME (mais robusto
+  // que keyup puro), então sincroniza com a digitação real e não com o evento bruto.
+  const typingRef = useRef(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     return () => {
@@ -241,26 +244,37 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
     };
   }, []);
 
+  const stopTypingSignal = useCallback((): void => {
+    if (typingTimer.current !== null) {
+      clearTimeout(typingTimer.current);
+      typingTimer.current = null;
+    }
+    if (typingRef.current) {
+      typingRef.current = false;
+      void onTyping(false);
+    }
+  }, [onTyping]);
+
   const handleDraftChange = (e: ChangeEvent<HTMLInputElement>): void => {
     setDraft(e.target.value);
     if (!canCompose) return;
-    void onTyping(true);
+    if (!typingRef.current) {
+      typingRef.current = true;
+      void onTyping(true);
+    }
     if (typingTimer.current !== null) clearTimeout(typingTimer.current);
-    typingTimer.current = setTimeout(() => {
-      void onTyping(false);
-      typingTimer.current = null;
-    }, 2500);
+    typingTimer.current = setTimeout(stopTypingSignal, 2500);
+  };
+
+  const handleDraftBlur = (): void => {
+    stopTypingSignal();
   };
 
   const submit = (e: FormEvent): void => {
     e.preventDefault();
     const text = draft.trim();
     if (text === "" || !canCompose) return;
-    if (typingTimer.current !== null) {
-      clearTimeout(typingTimer.current);
-      typingTimer.current = null;
-    }
-    void onTyping(false);
+    stopTypingSignal();
     setDraft("");
     void onSend(text);
   };
@@ -310,6 +324,7 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
           placeholder={tr("message")}
           value={draft}
           onChange={handleDraftChange}
+          onBlur={handleDraftBlur}
           disabled={!canCompose}
         />
         <button className="ecw-send" type="submit" disabled={!canCompose || draft.trim() === "" || sending} aria-label={sending ? tr("sending") : tr("send")}>

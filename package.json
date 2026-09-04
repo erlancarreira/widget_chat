@@ -1,6 +1,6 @@
 {
   "name": "@erlancarreira/evolution-chat",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Chat widget + Evolution API bridge (WhatsApp) — reutilizável, hexagonal, SOLID",
   "license": "MIT",
   "type": "module",
