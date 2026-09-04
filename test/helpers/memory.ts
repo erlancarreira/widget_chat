@@ -60,6 +60,7 @@ export function createMemoryStore(): MemorySessionStore {
         visitorPhone: input.visitorPhone,
         visitorContact: input.visitorContact ?? null,
         groupJid: input.groupJid,
+        mode: input.mode,
         status: "active",
         createdAt: isoNow(),
         lastMessageAt: null,
@@ -74,6 +75,12 @@ export function createMemoryStore(): MemorySessionStore {
 
     async getSessionByGroupJid(jid) {
       return sessions.find((s) => s.groupJid === jid) ?? null;
+    },
+
+    async getSessionByVisitorPhone(phone) {
+      // Mais recente sessão ativa daquele telefone (modo direto 1:1).
+      const found = sessions.find((s) => s.visitorPhone === phone && s.status === "active");
+      return found ?? null;
     },
 
     async appendMessage(input) {

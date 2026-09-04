@@ -157,4 +157,40 @@ describe("createEvolutionClient", () => {
     expect(await client.getConnectionState("i")).toBe("open");
     expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe("https://evo.test/instance/connectionState/i");
   });
+
+  // Gestão de instância pelo LMS (a instância é criada/garantida pelo app, não manualmente na Evolution).
+
+  it("createInstance faz POST /instance/create com { instanceName, integration }", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(ok({ instanceName: "aulivra" }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    await client.createInstance("aulivra");
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://evo.test/instance/create");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ instanceName: "aulivra", integration: "WHATSAPP-BAILEYS" });
+  });
+
+  it("ensureInstance não cria quando getConnectionState responde (instância já existe)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(ok({ instance: { state: "open" } }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    await client.ensureInstance("aulivra");
+    expect(fetchImpl.mock.calls).toHaveLength(1); // só o GET de estado, sem POST de criação
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe("https://evo.test/instance/connectionState/aulivra");
+  });
+
+  it("ensureInstance cria quando getConnectionState falha (instância inexistente)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("instance not found", { status: 404 }))
+      .mockResolvedValueOnce(ok({ instanceName: "aulivra" }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    await client.ensureInstance("aulivra");
+    expect(fetchImpl.mock.calls).toHaveLength(2);
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe("https://evo.test/instance/connectionState/aulivra");
+    expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe("https://evo.test/instance/create");
+    expect(JSON.parse(String((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body))).toEqual({
+      instanceName: "aulivra",
+      integration: "WHATSAPP-BAILEYS",
+    });
+  });
 });

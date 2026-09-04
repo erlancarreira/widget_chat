@@ -55,15 +55,20 @@ function mockClient(over: ClientOverrides = {}) {
   const createGroup = vi.fn(
     over.createGroup ?? (async (): Promise<CreateGroupResult> => ({ groupJid: GROUP_JID })),
   );
+  const setGroupPicture = vi.fn(async () => undefined);
   const client: EvolutionClient = {
     sendText,
     createGroup,
+    setGroupPicture,
     leaveGroup: vi.fn(async () => undefined),
     getConnectionState: vi.fn(async () => "open" as const),
     connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
     setWebhook: vi.fn(async () => undefined),
+    createInstance: vi.fn(async () => undefined),
+    ensureInstance: vi.fn(async () => undefined),
+    logout: vi.fn(async () => undefined),
   };
-  return { client, sendText, createGroup };
+  return { client, sendText, createGroup, setGroupPicture };
 }
 
 interface SetupOptions {
@@ -74,18 +79,18 @@ interface SetupOptions {
 
 function setup(opts: SetupOptions = {}) {
   const store = opts.store ?? createMemoryStore();
-  const { client, sendText, createGroup } = mockClient(opts.client);
+  const { client, sendText, createGroup, setGroupPicture } = mockClient(opts.client);
   // T do mock anotado com a assinatura da porta: dá tipos corretos a publish.mock.calls.
   const publish = vi.fn<RealtimeTransport["publish"]>(async () => undefined);
   const transport: RealtimeTransport = { publish };
   const bridge = new ChatBridge({ client, store, transport, clock: () => NOW });
   bridge.setConfig(config(opts.cfg));
-  return { bridge, store, transport, publish, client, sendText, createGroup };
+  return { bridge, store, transport, publish, client, sendText, createGroup, setGroupPicture };
 }
 
 async function seedSession(
   store: MemorySessionStore,
-  opts: { realtimeToken?: string; groupJid?: string | null; status?: ChatSessionStatus; visitorName?: string } = {},
+  opts: { realtimeToken?: string; groupJid?: string | null; status?: ChatSessionStatus; visitorName?: string; mode?: "group" | "direct" } = {},
 ): Promise<ChatSession> {
   const session = await store.createSession({
     code: "A3F2",
@@ -93,6 +98,7 @@ async function seedSession(
     visitorName: opts.visitorName ?? "João",
     visitorPhone: VISITOR_PHONE,
     groupJid: opts.groupJid === undefined ? GROUP_JID : opts.groupJid,
+    mode: opts.mode ?? "group",
   });
   if (opts.status !== undefined) await store.markStatus(session.id, opts.status);
   return session;
@@ -222,6 +228,29 @@ describe("ChatBridge.startChat", () => {
       waMessageId: SENT_WA_ID,
     });
     expect(store.messages).toEqual(result.messages);
+  });
+
+  it("modo direto (createGroup:false): não cria grupo, envia 1:1 p/ plataforma e marca sessão direta", async () => {
+    const { bridge, store, publish, createGroup, sendText } = setup({ cfg: { createGroup: false } });
+
+    const result = await bridge.startChat({ name: "João Silva", phone: "(11) 99999-8888", message: "Quero comprar" });
+
+    expect(createGroup).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0]?.[1]).toBe(PLATFORM_JID); // destino = número da plataforma (1:1)
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.session.groupJid).toBeNull();
+    expect(result.session.mode).toBe("direct");
+  });
+
+  it("modo grupo com groupImage: define a capa do grupo via setGroupPicture", async () => {
+    const { bridge, setGroupPicture } = setup({ cfg: { groupImage: "https://img/x.png" } });
+
+    await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
+
+    expect(setGroupPicture).toHaveBeenCalledTimes(1);
+    expect(setGroupPicture.mock.calls[0]?.[1]).toBe(GROUP_JID);
+    expect(setGroupPicture.mock.calls[0]?.[2]).toBe("https://img/x.png");
   });
 
   it("registra o waMessageId enviado (dedupe de eco) e persiste contact", async () => {
@@ -383,6 +412,28 @@ describe("ChatBridge.startChat", () => {
     expect(store.sessions[0]?.status).toBe("failed");
     expect(store.messages).toHaveLength(0);
   });
+
+  it("reaproveita a sessão ativa do visitante (mesmo grupo) em vez de criar grupo novo", async () => {
+    const { bridge, store, createGroup, sendText } = setup();
+    const prior = await seedSession(store, { groupJid: GROUP_JID });
+
+    const { session, messages } = await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "Outra dúvida" });
+
+    expect(createGroup).not.toHaveBeenCalled(); // não criou grupo novo
+    expect(session.id).toBe(prior.id); // reaproveitou a sessão existente
+    expect(session.realtimeToken).toBe(prior.realtimeToken);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.body).toBe("Outra dúvida");
+    expect(sendText.mock.calls[0]?.[1]).toBe(GROUP_JID); // enviou para o grupo existente
+  });
+
+  it("sessão existente fechada (visitante saiu) → cria novo grupo (não reaproveita)", async () => {
+    const store = createMemoryStore();
+    const { bridge, createGroup } = setup({ store });
+    await seedSession(store, { groupJid: GROUP_JID, status: "closed" });
+    await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "Oi de novo" });
+    expect(createGroup).toHaveBeenCalledTimes(1); // grupo novo, pois o anterior está fechado
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -454,14 +505,19 @@ describe("ChatBridge.sendVisitorMessage", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it("sessão sem groupJid → ChatError send_failed sem persistir mensagem", async () => {
+  it("sessão sem groupJid (modo direto) → envia 1:1 para o número da plataforma e persiste", async () => {
     const { bridge, store, sendText } = setup();
-    await seedSession(store, { groupJid: null });
+    await seedSession(store, { groupJid: null, mode: "direct" });
 
-    const error = await captureError(bridge.sendVisitorMessage("RT-1", "oi"));
-    expect(error.code).toBe("send_failed");
-    expect(sendText).not.toHaveBeenCalled();
-    expect(store.messages).toHaveLength(0);
+    const msg = await bridge.sendVisitorMessage("RT-1", "oi");
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0]?.[0]).toBe(INSTANCE);
+    expect(sendText.mock.calls[0]?.[1]).toBe(PLATFORM_JID); // destino = número da plataforma (1:1)
+    expect(sendText.mock.calls[0]?.[2]).toContain("oi");
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0]?.status).toBe("sent");
+    expect(msg.status).toBe("sent");
   });
 
   it("instância offline (client rejeita) → status failed + rethrow ChatError send_failed", async () => {
@@ -481,6 +537,29 @@ describe("ChatBridge.sendVisitorMessage", () => {
     expect(store.messages[0]?.status).toBe("failed");
     expect(store.messages[0]?.sessionId).toBe(session.id);
     expect(store.sessions[0]?.lastMessageAt).toBeNull(); // sessão não foi tocada
+  });
+
+  it("grupo inexistente (404) → fecha sessão, anexa aviso de sistema, sai do grupo órfão", async () => {
+    const { bridge, store, publish, client } = setup({
+      client: {
+        sendText: async () => {
+          throw new EvolutionApiError(404, "group not found", "sendText");
+        },
+      },
+    });
+    await seedSession(store);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const error = await captureError(bridge.sendVisitorMessage("RT-1", "oi"));
+
+    expect(error.code).toBe("send_failed");
+    expect(store.sessions[0]?.status).toBe("closed");
+    const sys = store.messages.find((m) => m.direction === "system");
+    expect(sys?.body).toContain("não está mais disponível");
+    const sessionEvent = publish.mock.calls.find((c) => c[1]?.type === "session");
+    expect(sessionEvent?.[1]).toEqual({ type: "session", status: "closed" });
+    expect(client.leaveGroup).toHaveBeenCalledWith(INSTANCE, GROUP_JID);
+    logSpy.mockRestore();
   });
 });
 
@@ -549,11 +628,28 @@ describe("ChatBridge.handleWebhook", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("mensagem direta (não @g.us) → handled:false", async () => {
+  it("mensagem direta (não @g.us) de visitante conhecido → route/handled:true (modo direto)", async () => {
+    const { bridge, store, publish } = setup();
+    const session = await seedSession(store);
+
+    const result = await bridge.handleWebhook(
+      upsertPayload({ id: "WA-DIRECT-1", jid: `${VISITOR_PHONE}@s.whatsapp.net`, fromMe: false, text: "Olá direto" }),
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0]).toMatchObject({ direction: "visitor", body: "Olá direto", status: "sent" });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(session.lastMessageAt).not.toBeNull();
+  });
+
+  it("mensagem direta (não @g.us) sem visitante correspondente → handled:false", async () => {
     const { bridge, store, publish } = setup();
     await seedSession(store);
 
-    const result = await bridge.handleWebhook(upsertPayload({ jid: `${VISITOR_PHONE}@s.whatsapp.net` }));
+    const result = await bridge.handleWebhook(
+      upsertPayload({ id: "WA-DIRECT-2", jid: "5511000000000@s.whatsapp.net", fromMe: false, text: "estranho" }),
+    );
 
     expect(result).toEqual({ handled: false });
     expect(store.messages).toHaveLength(0);
@@ -603,6 +699,64 @@ describe("ChatBridge.handleWebhook", () => {
     expect(publish).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalled();
     logSpy.mockRestore();
+  });
+
+  it("group-participants.update (leave, não-visitor) → append system message + publish único", async () => {
+    const { bridge, store, publish } = setup();
+    const session = await seedSession(store);
+
+    const result = await bridge.handleWebhook({
+      event: "group-participants.update",
+      data: {
+        id: GROUP_JID,
+        participants: ["5511000000000@s.whatsapp.net"],
+        action: "leave",
+      },
+    });
+
+    expect(result).toEqual({ handled: true });
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0]).toMatchObject({ direction: "system", status: "sent" });
+    expect(store.messages[0]?.body).toContain("saíram do grupo");
+    expect(store.sessions[0]?.status).toBe("active"); // não era o visitante → sessão segue ativa
+    // 1 publish: só a mensagem de sistema (sem evento de session porque não fechou).
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls[0]?.[0]).toBe(session.realtimeToken);
+    expect(publish.mock.calls[0]?.[1]).toEqual({ type: "message", message: store.messages[0] });
+  });
+
+  it("group-participants: o próprio visitante sai → sessão fechada (visitor_left) + sai do grupo órfão", async () => {
+    const { bridge, store, publish, client } = setup();
+    await seedSession(store);
+
+    const result = await bridge.handleWebhook({
+      event: "group-participants.update",
+      data: {
+        id: GROUP_JID,
+        participants: [`${VISITOR_PHONE}@s.whatsapp.net`],
+        action: "leave",
+      },
+    });
+
+    expect(result).toEqual({ handled: true });
+    expect(store.sessions[0]?.status).toBe("closed");
+    // 2 publishes: mensagem de sistema + evento de session (status closed).
+    expect(publish).toHaveBeenCalledTimes(2);
+    const sessionEvent = publish.mock.calls.find((c) => c[1]?.type === "session");
+    expect(sessionEvent?.[1]).toEqual({ type: "session", status: "closed" });
+    // Limpeza: empresa sai do grupo na Evolution para não acumular órfãos.
+    expect(client.leaveGroup).toHaveBeenCalledWith(INSTANCE, GROUP_JID);
+  });
+
+  it("group-participants de grupo desconhecido → handled:true, sem append e sem publish", async () => {
+    const { bridge, store, publish } = setup();
+    const result = await bridge.handleWebhook({
+      event: "group-participants.update",
+      data: { id: "120363unknown@g.us", participants: ["5511000000000@s.whatsapp.net"], action: "leave" },
+    });
+    expect(result).toEqual({ handled: true });
+    expect(store.messages).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
   });
 });
 

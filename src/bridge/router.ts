@@ -3,12 +3,12 @@
 // Puro: não persiste, não publica, não chama a Evolution. Recebe o recorte mínimo do
 // SessionStore (Pick) e devolve um RouterDecision discriminado; quem executa é a bridge.
 //
-// Regras (ordem fixada pelo plano):
-//   1. jid não termina em "@g.us"            → ignore   (sem tocar no store)
-//   2. sem sessão para o groupJid             → unknown_session
-//   3. isEcho(sessionId, waMessageId)         → echo     (mensagem enviada por nós)
-//   4. sem texto                              → not_text
-//   5. caso contrário                         → route, direction = fromMe ? owner : visitor
+// Regras (modo grupo e modo direto):
+//   - jid de grupo (@g.us): sessão por groupJid (comportamento original).
+//   - jid pessoal (1:1, modo direto): sessão pelo telefone do visitante.
+//   - isEcho(sessionId, waMessageId)       → echo   (mensagem enviada por nós)
+//   - sem texto                            → not_text
+//   - caso contrário                       → route, direction = fromMe ? owner : visitor
 
 import type { InboundMessage } from "../types";
 import type { ChatMessageDirection } from "../types";
@@ -18,7 +18,12 @@ import type { RouterDecision, SessionStore } from "./types";
 const GROUP_JID_SUFFIX = "@g.us";
 
 export class ConversationRouter {
-  constructor(private readonly store: Pick<SessionStore, "getSessionByGroupJid" | "isEcho">) {}
+  constructor(
+    private readonly store: Pick<
+      SessionStore,
+      "getSessionByGroupJid" | "getSessionByVisitorPhone" | "isEcho"
+    >,
+  ) {}
 
   /**
    * `now` faz parte do contrato para que a bridge propague uma única leitura de relógio
@@ -28,9 +33,16 @@ export class ConversationRouter {
   async decide(msg: InboundMessage, now: Date): Promise<RouterDecision> {
     void now;
 
-    if (!msg.jid.endsWith(GROUP_JID_SUFFIX)) return { action: "ignore" };
+    let session: Awaited<ReturnType<SessionStore["getSessionByGroupJid"]>> = null;
+    if (msg.jid.endsWith(GROUP_JID_SUFFIX)) {
+      session = await this.store.getSessionByGroupJid(msg.jid);
+    } else {
+      // Modo direto: o jid da conversa 1:1 é o JID pessoal do visitante (ex.: 5511...@s.whatsapp.net).
+      const phone = msg.jid.split("@")[0] ?? "";
+      if (phone.length === 0) return { action: "ignore" };
+      session = await this.store.getSessionByVisitorPhone(phone);
+    }
 
-    const session = await this.store.getSessionByGroupJid(msg.jid);
     if (session === null) return { action: "unknown_session" };
 
     if (await this.store.isEcho(session.id, msg.waMessageId)) return { action: "echo" };

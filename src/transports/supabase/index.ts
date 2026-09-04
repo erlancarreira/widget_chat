@@ -25,6 +25,37 @@ const BROADCAST_EVENT = "chat";
 
 const channelName = (realtimeToken: string): string => `${CHANNEL_PREFIX}${realtimeToken}`;
 
+// Um único client por (url) por página. Reconstruir o client a cada render (StrictMode,
+// HMR, múltiplos mounts do widget) cria várias instâncias de GoTrueClient competindo pela
+// MESMA chave de localStorage do client de autenticação do app → dispara o aviso
+// "Multiple GoTrueClient instances detected". Cacheamos e isolamos o auth do realtime.
+const clientCache = new Map<string, SupabaseClient>();
+
+function getRealtimeClient(url: string, anonKey: string): SupabaseClient {
+  const cached = clientCache.get(url);
+  if (cached) return cached;
+
+  const client = createClient(url, anonKey, {
+    auth: {
+      // O widget só assina um canal broadcast público: não precisa de sessão persistida,
+      // nem de refresh de token, nem de ler a URL. Desligar o persist + usar storageKey
+      // próprio garante que este client NÃO concorra com o auth do app pela mesma chave.
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: "evolution-chat-realtime",
+    },
+  });
+
+  clientCache.set(url, client);
+  return client;
+}
+
+/** Test-only: esvazia o cache de clientes entre testes. */
+export function __resetRealtimeClientCache(): void {
+  clientCache.clear();
+}
+
 /**
  * Estados de assinatura do Realtime → "open"/"closed" da porta.
  * Comparar via lookup (e não `status === "SUBSCRIBED"`) porque REALTIME_SUBSCRIBE_STATES é
@@ -63,7 +94,7 @@ export function createSupabaseTransport(admin: SupabaseClient): RealtimeTranspor
  * `chat:<token>` e devolve o unsubscribe. O client é criado uma única vez na fábrica.
  */
 export function createSupabaseRealtimeHandle(url: string, anonKey: string): RealtimeHandle {
-  const client = createClient(url, anonKey);
+  const client = getRealtimeClient(url, anonKey);
 
   return {
     subscribe(realtimeToken, onEvent, onStatus) {

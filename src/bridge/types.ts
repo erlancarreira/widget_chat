@@ -25,6 +25,8 @@ export interface SessionStore {
     visitorPhone: string;
     visitorContact?: string | null;
     groupJid: string | null;
+    /** Modo da conversa: "group" (padrão) ou "direct" (1:1 com a plataforma). Opcional. */
+    mode?: "group" | "direct";
     /** Hash não-reversível do IP (LGPD): usado por countRecentSessionsByIpHash. */
     ipHash?: string | null;
     /** User-Agent bruto da requisição (auditoria/forense; nunca exibido). */
@@ -32,6 +34,8 @@ export interface SessionStore {
   }): Promise<ChatSession>;
   getSessionByToken(token: string): Promise<ChatSession | null>;
   getSessionByGroupJid(jid: string): Promise<ChatSession | null>;
+  /** Lookup da sessão ativa de um visitante pelo telefone (modo direto 1:1). */
+  getSessionByVisitorPhone(phone: string): Promise<ChatSession | null>;
   appendMessage(input: {
     sessionId: string;
     direction: ChatMessageDirection;

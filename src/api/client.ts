@@ -9,10 +9,22 @@ export interface CreateGroupResult { groupJid: string; }
 export interface EvolutionClient {
   sendText(instance: string, number: string, text: string): Promise<SendTextResult>;
   createGroup(instance: string, subject: string, participants: string[], description?: string): Promise<CreateGroupResult>;
+  setGroupPicture(instance: string, groupJid: string, image: string): Promise<void>;
   leaveGroup(instance: string, groupJid: string): Promise<void>;
+  /** Encerra a sessão WhatsApp da instância (desvincula o dispositivo). */
+  logout(instance: string): Promise<void>;
   getConnectionState(instance: string): Promise<"open" | "connecting" | "close">;
   connectQR(instance: string): Promise<{ qrBase64: string | null; pairingCode: string | null }>;
   setWebhook(instance: string, url: string, events: string[]): Promise<void>;
+  /** Cria a instância na Evolution (one-time). Exige a apiKey com permissão de criação. */
+  createInstance(instance: string, integration?: "WHATSAPP-BAILEYS" | "WHATSAPP-BUSINESS"): Promise<void>;
+  /**
+   * Garante que a instância existe (idempotente): se `getConnectionState` responde
+   * (qualquer estado), não faz nada; só chama `createInstance` quando a leitura falha
+   * (instância inexistente). Assim o LMS gerencia o ciclo de vida sem criar manualmente
+   * na Evolution — o único passo humano é escanear o QR de pareamento.
+   */
+  ensureInstance(instance: string): Promise<void>;
 }
 
 export class EvolutionApiError extends Error {
@@ -69,6 +81,15 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
     return value;
   }
 
+  // Estado da instância (open/connecting/close); lança EvolutionApiError se a resposta
+  // for inválida OU a instância não existir (a Evolution devolve erro nesse caso).
+  async function fetchConnectionState(instance: string): Promise<"open" | "connecting" | "close"> {
+    const res = await requestJson("getConnectionState", "GET", `/instance/connectionState/${instance}`);
+    const state = readPath(res.json, "instance", "state");
+    if (state === "open" || state === "connecting" || state === "close") return state;
+    throw new EvolutionApiError(res.status, res.text, res.operation);
+  }
+
   return {
     async sendText(instance, number, text) {
       const res = await requestJson("sendText", "POST", `/message/sendText/${instance}`, { number, text });
@@ -85,15 +106,22 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
       return { groupJid };
     },
 
+    async setGroupPicture(instance, groupJid, image) {
+      // Evolution v2: POST /group/updateGroupPicture/{instance} com { groupJid, image }
+      // (image = URL pública ou base64). Imagem é cosmética: qualquer falha vira EvolutionApiError.
+      await request("setGroupPicture", "POST", `/group/updateGroupPicture/${instance}`, { groupJid, image });
+    },
+
     async leaveGroup(instance, groupJid) {
       await request("leaveGroup", "DELETE", `/group/leave/${instance}`, { groupId: groupJid });
     },
 
+    async logout(instance) {
+      await request("logout", "DELETE", `/instance/logout/${instance}`);
+    },
+
     async getConnectionState(instance) {
-      const res = await requestJson("getConnectionState", "GET", `/instance/connectionState/${instance}`);
-      const state = readPath(res.json, "instance", "state");
-      if (state === "open" || state === "connecting" || state === "close") return state;
-      throw new EvolutionApiError(res.status, res.text, res.operation);
+      return fetchConnectionState(instance);
     },
 
     async connectQR(instance) {
@@ -105,6 +133,20 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
         qrBase64: typeof base64 === "string" ? base64 : null,
         pairingCode: typeof pairingCode === "string" ? pairingCode : typeof code === "string" ? code : null,
       };
+    },
+
+    async createInstance(instance, integration = "WHATSAPP-BAILEYS") {
+      await request("createInstance", "POST", "/instance/create", { instanceName: instance, integration });
+    },
+
+    async ensureInstance(instance) {
+      try {
+        await fetchConnectionState(instance); // existe (qualquer estado) → ok, não faz nada
+        return;
+      } catch {
+        // instância inexistente (ou erro de leitura) → tenta criar
+      }
+      await this.createInstance(instance);
     },
 
     async setWebhook(instance, url, events) {

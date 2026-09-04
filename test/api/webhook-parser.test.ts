@@ -82,4 +82,47 @@ describe("parseWebhookEvent", () => {
     const parsed = parseWebhookEvent({ data: {} });
     expect(parsed.kind).toBe("ignored");
   });
+
+  it("group-participants.update (leave) → kind group_participants com jids/action", () => {
+    const parsed = parseWebhookEvent({
+      event: "group-participants.update",
+      data: {
+        id: "120363000@g.us",
+        participants: ["5511999998888@s.whatsapp.net"],
+        author: "5511988887777@s.whatsapp.net",
+        action: "leave",
+      },
+    });
+    expect(parsed.kind).toBe("group_participants");
+    if (parsed.kind === "group_participants") {
+      expect(parsed.event.groupJid).toBe("120363000@g.us");
+      expect(parsed.event.participants).toEqual(["5511999998888@s.whatsapp.net"]);
+      expect(parsed.event.action).toBe("leave");
+      expect(parsed.event.author).toBe("5511988887777@s.whatsapp.net");
+    }
+  });
+
+  it("group-participants.update mapeia action add/remove/promote/demote", () => {
+    for (const action of ["add", "remove", "promote", "demote"]) {
+      const parsed = parseWebhookEvent({
+        event: "group-participants.update",
+        data: { id: "g@g.us", participants: ["5511000000000@s.whatsapp.net"], action },
+      });
+      expect(parsed.kind).toBe("group_participants");
+      if (parsed.kind === "group_participants") expect(parsed.event.action).toBe(action);
+    }
+  });
+
+  it("group-participants sem id/participants → ignored (nunca lança)", () => {
+    expect(parseWebhookEvent({ event: "group-participants.update", data: {} }).kind).toBe("ignored");
+    expect(
+      parseWebhookEvent({ event: "group-participants.update", data: { id: "g@g.us" } }).kind,
+    ).toBe("ignored");
+    expect(
+      parseWebhookEvent({
+        event: "group-participants.update",
+        data: { id: "g@g.us", participants: "not-an-array" },
+      }).kind,
+    ).toBe("ignored");
+  });
 });

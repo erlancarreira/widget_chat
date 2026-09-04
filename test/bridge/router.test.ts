@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ConversationRouter } from "../../src/bridge/router";
 import type { SessionStore } from "../../src/bridge/types";
 import type { ChatSession } from "../../src/types";
-import type { InboundMessage } from "../../src/api/webhook-parser";
+import type { InboundMessage } from "../../src/types";
 
 const GROUP_A = "120363aaaa@g.us";
 const GROUP_B = "120363bbbb@g.us";
@@ -22,19 +22,31 @@ function session(id: string, groupJid: string): ChatSession {
   };
 }
 
-// Fake in-memory: só as duas portas que o router enxerga (Pick<SessionStore, ...>).
+// Fake in-memory: as portas que o router enxerga (Pick<SessionStore, ...>).
 // Registra chamadas para pinar que `ignore` não consulta o store e que `isEcho`
 // recebe (sessionId, waMessageId) — não só o id da mensagem.
 function makeStore(sessions: ChatSession[], echoIds: string[] = []) {
   const echo = new Set(echoIds);
-  const calls: { getSessionByGroupJid: string[]; isEcho: [string, string][] } = {
+  const calls: {
+    getSessionByGroupJid: string[];
+    getSessionByVisitorPhone: string[];
+    isEcho: [string, string][];
+  } = {
     getSessionByGroupJid: [],
+    getSessionByVisitorPhone: [],
     isEcho: [],
   };
-  const store: Pick<SessionStore, "getSessionByGroupJid" | "isEcho"> = {
+  const store: Pick<
+    SessionStore,
+    "getSessionByGroupJid" | "getSessionByVisitorPhone" | "isEcho"
+  > = {
     async getSessionByGroupJid(jid) {
       calls.getSessionByGroupJid.push(jid);
       return sessions.find((s) => s.groupJid === jid) ?? null;
+    },
+    async getSessionByVisitorPhone(phone) {
+      calls.getSessionByVisitorPhone.push(phone);
+      return sessions.find((s) => s.visitorPhone === phone) ?? null;
     },
     async isEcho(sessionId, waMessageId) {
       calls.isEcho.push([sessionId, waMessageId]);
@@ -109,31 +121,40 @@ describe("ConversationRouter.decide", () => {
     expect(d).toEqual({ action: "not_text" });
   });
 
-  it("jid que não termina em @g.us → ignore sem tocar no store", async () => {
-    const { store, calls } = makeStore(sessions);
-    const d = await new ConversationRouter(store).decide(inbound({ jid: "5511999999999@s.whatsapp.net" }), NOW);
-    expect(d).toEqual({ action: "ignore" });
-    expect(calls.getSessionByGroupJid).toEqual([]);
-    expect(calls.isEcho).toEqual([]);
+  it("jid pessoal com telefone de visitante conhecido → route/visitor (modo direto)", async () => {
+    const { store } = makeStore(sessions);
+    const d = await new ConversationRouter(store).decide(
+      inbound({ jid: "5511999999999@s.whatsapp.net", fromMe: false, text: "oi" }),
+      NOW,
+    );
+    expect(d.action).toBe("route");
+    expect(d.direction).toBe("visitor");
+    expect(d.session?.id).toBe("s-1");
+    expect(d.text).toBe("oi");
   });
 
-  it("só o SUFIXO @g.us conta como grupo (não basta conter)", async () => {
+  it("jid pessoal fromMe=true com visitante conhecido → route/owner (resposta da empresa)", async () => {
+    const { store } = makeStore(sessions);
+    const d = await new ConversationRouter(store).decide(
+      inbound({ jid: "5511999999999@s.whatsapp.net", fromMe: true, text: "Resposta" }),
+      NOW,
+    );
+    expect(d.action).toBe("route");
+    expect(d.direction).toBe("owner");
+    expect(d.session?.id).toBe("s-1");
+  });
+
+  it("jid não-grupo sem visitante correspondente → unknown_session (não consulta groupJid)", async () => {
     const { store, calls } = makeStore(sessions);
-    const router = new ConversationRouter(store);
-    const naoGrupo = [
-      "status@broadcast",
-      "g.us",
-      "5511999999999@s.whatsapp.net",
-      "120363abc@g.us.invalid", // contém @g.us, mas não termina nele
-    ];
+    const naoGrupo = ["status@broadcast", "g.us", "120363abc@g.us.invalid"];
     for (const jid of naoGrupo) {
-      const d = await router.decide(inbound({ jid }), NOW);
-      expect(d, `jid=${jid}`).toEqual({ action: "ignore" });
+      const d = await new ConversationRouter(store).decide(inbound({ jid }), NOW);
+      expect(d, `jid=${jid}`).toEqual({ action: "unknown_session" });
     }
     expect(calls.getSessionByGroupJid).toEqual([]);
   });
 
-  it("sessão conhecida por outro grupo não vaza na decisão", async () => {
+  it("sessão conhecida por outro grupo não vaza na decisão direta", async () => {
     const { store } = makeStore(sessions);
     const d = await new ConversationRouter(store).decide(inbound({ jid: GROUP_B }), NOW);
     expect(d.session?.id).toBe("s-2");

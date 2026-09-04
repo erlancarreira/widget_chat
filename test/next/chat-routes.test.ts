@@ -61,10 +61,14 @@ function mockClient(over: ClientOverrides = {}) {
   const client: EvolutionClient = {
     sendText,
     createGroup,
+    setGroupPicture: vi.fn(async () => undefined),
     leaveGroup: vi.fn(async () => undefined),
     getConnectionState: vi.fn(async () => "open" as const),
     connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
     setWebhook: vi.fn(async () => undefined),
+    createInstance: vi.fn(async () => undefined),
+    ensureInstance: vi.fn(async () => undefined),
+    logout: vi.fn(async () => undefined),
   };
   return { client, sendText, createGroup };
 }
@@ -94,7 +98,7 @@ function setup(opts: SetupOptions = {}) {
 
 async function seedSession(
   store: MemorySessionStore,
-  opts: { realtimeToken?: string; groupJid?: string | null; status?: ChatSessionStatus } = {},
+  opts: { realtimeToken?: string; groupJid?: string | null; status?: ChatSessionStatus; mode?: "group" | "direct" } = {},
 ): Promise<ChatSession> {
   const session = await store.createSession({
     code: "A3F2",
@@ -102,6 +106,7 @@ async function seedSession(
     visitorName: "João",
     visitorPhone: VISITOR_PHONE,
     groupJid: opts.groupJid === undefined ? GROUP_JID : opts.groupJid,
+    mode: opts.mode ?? "group",
   });
   if (opts.status !== undefined) await store.markStatus(session.id, opts.status);
   return session;

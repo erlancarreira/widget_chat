@@ -19,8 +19,8 @@ import { ChatError } from "../errors";
 import { generateRealtimeToken, generateSessionCode } from "../api/ids";
 import { normalizePhone, toWhatsappJid } from "../api/phone";
 import { parseWebhookEvent } from "../api/webhook-parser";
-import type { EvolutionClient } from "../api/client";
-import type { ChatConfig, ChatMessage, ChatSession } from "../types";
+import { EvolutionApiError, type EvolutionClient } from "../api/client";
+import type { ChatConfig, ChatMessage, ChatSession, GroupParticipantChange } from "../types";
 import { ConversationRouter } from "./router";
 import { formatFirstMessage, formatFollowup } from "./format";
 import type { Clock, RealtimeTransport, SessionStore } from "./types";
@@ -79,6 +79,23 @@ function requireText(value: string, min: number, max: number, field: string): st
   return trimmed;
 }
 
+/**
+ * Detecta erro da Evolution que indica que o destino sumiu: grupo apagado/saiu,
+ * participante removido, número bloqueado, etc. Usado para encerrar a sessão com
+ * aviso em vez de deixar o composer travado num envio que nunca chega.
+ * Sinais: status 404/410 (grupo inexistente / não é participante) ou palavras-chave
+ * no corpo/mensagem da resposta.
+ */
+function isTargetGoneError(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
+  const status = (error as { status?: unknown }).status;
+  if (status === 404 || status === 410) return true;
+  const text = `${String((error as { message?: unknown }).message ?? "")} ${String(
+    (error as { body?: unknown }).body ?? "",
+  )}`.toLowerCase();
+  return /group|participant|recipient|not found|unavailable|left|deleted|blocked|gone/.test(text);
+}
+
 export class ChatBridge {
   private readonly router: ConversationRouter;
   private readonly clock: Clock;
@@ -131,14 +148,57 @@ export class ChatBridge {
       }
     }
 
+    // Reusa a conversa ativa do mesmo visitante (um grupo/thread por cliente) em vez de
+    // abrir um grupo novo a cada reabertura — evita a proliferação de grupos no WhatsApp.
+    const existing = await store.getSessionByVisitorPhone(phone);
+    if (existing !== null) {
+      const firstTarget =
+        existing.groupJid === null
+          ? toWhatsappJid(normalizePhone(cfg.platformNumber))
+          : existing.groupJid;
+      let waMessageId: string;
+      try {
+        ({ waMessageId } = await this.deps.client.sendText(
+          cfg.instance,
+          firstTarget,
+          formatFirstMessage(existing.code, name, message),
+        ));
+      } catch (error) {
+        await store.markStatus(existing.id, "failed");
+        throw new ChatError("Falha ao enviar a primeira mensagem para o grupo", "send_failed", error);
+      }
+      await store.registerSentMessageId(existing.id, waMessageId);
+      const initial = await store.appendMessage({
+        sessionId: existing.id,
+        direction: "visitor",
+        body: message,
+        waMessageId,
+        status: "sent",
+      });
+      return { session: existing, messages: [initial] };
+    }
+
     const code = generateSessionCode();
     const visitorJid = toWhatsappJid(phone);
     const platformJid = toWhatsappJid(normalizePhone(cfg.platformNumber));
     // visitor == platform (a plataforma se auto-atende) → lista dedupe, uma única chamada.
     const participants = [...new Set([visitorJid, platformJid])];
     const subject = `${cfg.projectName} — ${name} (#${code})`;
+    const direct = cfg.createGroup === false;
 
-    const groupJid = await this.createGroupWithRetry(cfg.instance, subject, participants, platformJid);
+    let groupJid: string | null = null;
+    if (!direct) {
+      groupJid = await this.createGroupWithRetry(cfg.instance, subject, participants, platformJid);
+      // Imagem de capa do grupo (logo do site / upload do painel). Cosmético: falha não aborta.
+      const picture = (cfg.groupImage ?? "").trim();
+      if (picture !== "") {
+        try {
+          await this.deps.client.setGroupPicture(cfg.instance, groupJid, picture);
+        } catch {
+          // ignora falha de imagem — o atendimento segue sem a capa.
+        }
+      }
+    }
 
     const session = await store.createSession({
       code,
@@ -147,15 +207,25 @@ export class ChatBridge {
       visitorPhone: phone,
       visitorContact: input.contact ?? null,
       groupJid,
+      mode: direct ? "direct" : "group",
       ipHash: input.ipHash ?? null,
       userAgent: input.userAgent ?? null,
     });
+
+    // Em modo direto a conversa é 1:1 com a plataforma; senão, vai para o grupo.
+    let firstTarget: string;
+    if (direct) {
+      firstTarget = platformJid;
+    } else {
+      if (groupJid === null) throw new ChatError("Falha ao criar o grupo", "group_create_failed");
+      firstTarget = groupJid;
+    }
 
     let waMessageId: string;
     try {
       ({ waMessageId } = await this.deps.client.sendText(
         cfg.instance,
-        groupJid,
+        firstTarget,
         formatFirstMessage(code, name, message),
       ));
     } catch (error) {
@@ -186,7 +256,14 @@ export class ChatBridge {
     if (session === null) throw new ChatError("Sessão não encontrada", "session_not_found");
     if (session.status !== "active") throw new ChatError("Sessão encerrada", "session_closed");
     const body = requireText(text, MESSAGE_MIN, MESSAGE_MAX, "Mensagem");
-    if (session.groupJid === null) throw new ChatError("Sessão sem grupo associado", "send_failed");
+
+    // Destino: grupo (modo grupo) ou número da plataforma (modo direto 1:1, groupJid nulo).
+    let target: string;
+    if (session.groupJid === null) {
+      target = toWhatsappJid(normalizePhone(cfg.platformNumber));
+    } else {
+      target = session.groupJid;
+    }
 
     const pending = await store.appendMessage({
       sessionId: session.id,
@@ -199,11 +276,19 @@ export class ChatBridge {
     try {
       ({ waMessageId } = await this.deps.client.sendText(
         cfg.instance,
-        session.groupJid,
+        target,
         formatFollowup(session.visitorName, body),
       ));
     } catch (error) {
       await store.updateMessageStatus(pending.id, "failed");
+      // Se o destino sumiu (grupo saiu/apagado, número bloqueado), encerra a sessão com
+      // aviso claro e sai do grupo órfão (best-effort) em vez de deixar o composer travado.
+      if (isTargetGoneError(error)) {
+        await this.closeSessionCleanup(session, "send_target_gone", {
+          systemMessage:
+            "Não foi possível entregar a mensagem: o grupo não está mais disponível. Conversa encerrada — inicie uma nova para continuar.",
+        });
+      }
       throw new ChatError("Falha ao enviar mensagem para o grupo", "send_failed", error);
     }
 
@@ -223,6 +308,9 @@ export class ChatBridge {
   async handleWebhook(payload: unknown): Promise<{ handled: boolean }> {
     try {
       const parsed = parseWebhookEvent(payload);
+      if (parsed.kind === "group_participants") {
+        return await this.handleGroupParticipants(parsed.event);
+      }
       if (parsed.kind !== "message") return { handled: false }; // connection.update / ignored
 
       const now = this.clock();
@@ -252,6 +340,108 @@ export class ChatBridge {
     } catch (error) {
       console.error("[evolution-chat] webhook não processado:", error);
       return { handled: false };
+    }
+  }
+
+  /**
+   * Trata `group-participants.update` (Evolution): quando alguém entra, sai ou é
+   * removido do grupo da sessão, registra uma mensagem de sistema no chat (visível
+   * para visitante e time) e, se quem saiu foi o próprio visitante, encerra a sessão
+   * — a conversa 1:1 pelo WhatsApp não chega mais pelo grupo.
+   * NUNCA lança: qualquer erro é logado e devolvido como tratado (200) para a Evolution
+   * não reenviar.
+   */
+  private async handleGroupParticipants(
+    change: GroupParticipantChange,
+  ): Promise<{ handled: boolean }> {
+    try {
+      const session = await this.deps.store.getSessionByGroupJid(change.groupJid);
+      if (session === null) return { handled: true }; // grupo não é desta plataforma
+
+      const phones = change.participants.map((jid) => jid.split("@")[0] ?? jid);
+      const visitorLeft = change.participants.some((jid) => {
+        const phone = jid.split("@")[0] ?? "";
+        return phone !== "" && phone === session.visitorPhone;
+      });
+
+      let body: string;
+      switch (change.action) {
+        case "leave":
+          body = `Participante(s) saíram do grupo: ${phones.join(", ")}`;
+          break;
+        case "remove":
+          body = `Participante(s) removido(s) do grupo: ${phones.join(", ")}`;
+          break;
+        case "add":
+          body = `Participante(s) adicionado(s) ao grupo: ${phones.join(", ")}`;
+          break;
+        case "promote":
+          body = `Participante(s) promovido(s) a admin: ${phones.join(", ")}`;
+          break;
+        case "demote":
+          body = `Participante(s) rebaixado(s) de admin: ${phones.join(", ")}`;
+          break;
+        default:
+          body = `Alteração de participantes no grupo: ${phones.join(", ")}`;
+      }
+
+      const now = this.clock().toISOString();
+      const message = await this.deps.store.appendMessage({
+        sessionId: session.id,
+        direction: "system",
+        body,
+        status: "sent",
+      });
+      await this.deps.store.touchSession(session.id, now);
+      await this.deps.transport.publish(session.realtimeToken, { type: "message", message });
+
+      if (visitorLeft) {
+        await this.closeSessionCleanup(session, "visitor_left");
+      }
+
+      return { handled: true };
+    } catch (error) {
+      console.error("[evolution-chat] group-participants não processado:", error);
+      return { handled: true };
+    }
+  }
+
+  /**
+   * Encerra a sessão (status closed + evento realtime) e — só quando o grupo morreu do
+   * lado do visitante (ele saiu ou o destino sumiu) — faz a EMPRESA SAIR do grupo na
+   * Evolution (best-effort) para não acumular grupos órfãos. Em fechamentos normais
+   * (atendente encerrou a conversa) NÃO saímos: senão o visitante ficaria sozinho no grupo.
+   */
+  private async closeSessionCleanup(
+    session: ChatSession,
+    reason: string,
+    opts: { systemMessage?: string } = {},
+  ): Promise<void> {
+    const now = this.clock().toISOString();
+    await this.deps.store.markStatus(session.id, "closed", reason);
+    await this.deps.store.touchSession(session.id, now);
+
+    if (opts.systemMessage !== undefined) {
+      const notice = await this.deps.store.appendMessage({
+        sessionId: session.id,
+        direction: "system",
+        body: opts.systemMessage,
+        status: "sent",
+      });
+      await this.deps.transport.publish(session.realtimeToken, { type: "message", message: notice });
+    }
+
+    await this.deps.transport.publish(session.realtimeToken, { type: "session", status: "closed" });
+
+    if (
+      session.groupJid !== null &&
+      (reason === "visitor_left" || reason === "send_target_gone")
+    ) {
+      try {
+        await this.deps.client.leaveGroup(this.getConfig().instance, session.groupJid);
+      } catch (error) {
+        console.error("[evolution-chat] falha ao sair do grupo órfão:", error);
+      }
     }
   }
 

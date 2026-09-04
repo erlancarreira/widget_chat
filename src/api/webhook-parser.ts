@@ -3,11 +3,12 @@
 // Contrato: parseWebhookEvent(payload: unknown): ParsedWebhook.
 // NUNCA lança exceção — qualquer payload inesperado/inválido vira { kind: "ignored", reason }.
 
-import type { InboundMessage } from "../types";
+import type { GroupParticipantChange, InboundMessage } from "../types";
 
 export type ParsedWebhook =
   | { kind: "message"; event: InboundMessage }
   | { kind: "connection"; state: string }
+  | { kind: "group_participants"; event: GroupParticipantChange }
   | { kind: "ignored"; reason: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -86,6 +87,10 @@ export function parseWebhookEvent(payload: unknown): ParsedWebhook {
     return { kind: "ignored", reason: "connection.update sem state" };
   }
 
+  if (event === "group-participants.update") {
+    return parseGroupParticipants(data);
+  }
+
   if (event !== "messages.upsert") {
     return { kind: "ignored", reason: `evento não tratado: ${event}` };
   }
@@ -101,4 +106,41 @@ export function parseWebhookEvent(payload: unknown): ParsedWebhook {
     lastIgnored = parsed;
   }
   return lastIgnored;
+}
+
+/**
+ * Normaliza o evento `group-participants.update` da Evolution:
+ *   { id: "…@g.us", participants: ["…@s.whatsapp.net"], author: "…@s.whatsapp.net",
+ *     action: "add" | "remove" | "leave" | "promote" | "demote" }
+ * Campos faltantes/fora do formato viram { kind: "ignored" } (nunca lança).
+ */
+function parseGroupParticipants(data: unknown): ParsedWebhook {
+  if (!isRecord(data)) return { kind: "ignored", reason: "group-participants sem data" };
+
+  const groupJid = data["id"];
+  if (typeof groupJid !== "string" || groupJid.length === 0) {
+    return { kind: "ignored", reason: "group-participants sem id (groupJid)" };
+  }
+
+  const rawParticipants = data["participants"];
+  if (!Array.isArray(rawParticipants)) {
+    return { kind: "ignored", reason: "group-participants sem participants[]" };
+  }
+  const participants: string[] = [];
+  for (const p of rawParticipants) {
+    if (typeof p === "string" && p.length > 0) participants.push(p);
+  }
+  if (participants.length === 0) {
+    return { kind: "ignored", reason: "group-participants sem participantes válidos" };
+  }
+
+  const actionRaw = data["action"];
+  const action = typeof actionRaw === "string" ? actionRaw : "unknown";
+  const authorRaw = data["author"];
+  const author = typeof authorRaw === "string" ? authorRaw : null;
+
+  return {
+    kind: "group_participants",
+    event: { groupJid, participants, action, author, raw: data },
+  };
 }

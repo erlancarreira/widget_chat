@@ -221,20 +221,26 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
   return (
     <>
       <ul ref={listRef} className="ecw-list">
-        {messages.map((m) => (
-          <li key={m.id} className={`ecw-item ecw-item--${m.direction}`}>
-            <div className={`ecw-bubble ecw-bubble--${m.direction}`}>{m.body}</div>
-            <div className="ecw-meta">
-              <time dateTime={m.createdAt}>{formatTime(m.createdAt, locale)}</time>
-              {m.direction === "visitor" && <StatusMark status={m.status} />}
-              {m.status === "failed" && (
-                <button type="button" className="ecw-retry" onClick={() => { void onRetry(m.id); }}>
-                  {tr("retry")}
-                </button>
-              )}
-            </div>
-          </li>
-        ))}
+        {messages.map((m) =>
+          m.direction === "system" ? (
+            <li key={m.id} className="ecw-item ecw-item--system" role="status">
+              <div className="ecw-system">{m.body}</div>
+            </li>
+          ) : (
+            <li key={m.id} className={`ecw-item ecw-item--${m.direction}`}>
+              <div className={`ecw-bubble ecw-bubble--${m.direction}`}>{m.body}</div>
+              <div className="ecw-meta">
+                <time dateTime={m.createdAt}>{formatTime(m.createdAt, locale)}</time>
+                {m.direction === "visitor" && <StatusMark status={m.status} />}
+                {m.status === "failed" && (
+                  <button type="button" className="ecw-retry" onClick={() => { void onRetry(m.id); }}>
+                    {tr("retry")}
+                  </button>
+                )}
+              </div>
+            </li>
+          ),
+        )}
       </ul>
       {!canCompose && (
         <div className="ecw-closed">
@@ -366,7 +372,17 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
             />
           )}
 
-          <footer className="ecw-footer">{`${tr("poweredBy")} Evolution Chat`}</footer>
+          <footer className="ecw-footer">
+            {tr("poweredBy")}{" "}
+            <a
+              className="ecw-powered-link"
+              href="https://erlancarreira.com.br"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Erlan Carreira
+            </a>
+          </footer>
         </section>
       )}
     </div>

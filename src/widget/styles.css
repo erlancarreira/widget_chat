@@ -146,6 +146,17 @@
 .ecw-item { display: flex; flex-direction: column; max-width: 82%; }
 .ecw-item--visitor { align-self: flex-end; align-items: flex-end; }
 .ecw-item--owner { align-self: flex-start; align-items: flex-start; }
+.ecw-item--system { align-self: center; align-items: center; max-width: 92%; }
+.ecw-system {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--ecw-surface);
+  border: 1px solid var(--ecw-border);
+  color: var(--ecw-muted);
+  font-size: 11px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
 .ecw-bubble {
   padding: 8px 12px;
   border-radius: 12px;
@@ -229,6 +240,8 @@
 .ecw-closed { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ecw-border); background: var(--ecw-surface); }
 
 .ecw-footer { padding: 6px 12px 10px; font-size: 11px; color: var(--ecw-muted); text-align: center; background: var(--ecw-surface); }
+.ecw-powered-link { color: var(--ecw-accent); font-weight: 600; text-decoration: none; }
+.ecw-powered-link:hover { text-decoration: underline; }
 
 /* ── utilitários ─────────────────────────────────────────────────────────── */
 .ecw-hp { display: none !important; }

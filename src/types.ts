@@ -1,6 +1,6 @@
 // src/types.ts — tipos canônicos usados em TODO o SDK e nas tasks seguintes.
 
-export type ChatMessageDirection = "visitor" | "owner";
+export type ChatMessageDirection = "visitor" | "owner" | "system";
 export type ChatMessageStatus = "pending" | "sent" | "failed";
 export type ChatSessionStatus = "active" | "closed" | "failed";
 
@@ -24,6 +24,8 @@ export interface ChatSession {
   visitorPhone: string; // só dígitos com DDI, ex.: 5511999999999
   visitorContact: string | null;
   groupJid: string | null; // ex.: "120363...@g.us"
+  /** Modo da conversa: "group" (grupo por visitante, padrão) ou "direct" (1:1 com a plataforma). */
+  mode?: "group" | "direct";
   status: ChatSessionStatus;
   createdAt: string;
   lastMessageAt: string | null;
@@ -44,6 +46,10 @@ export interface ChatConfig {
   closeHours: number; // inatividade p/ fechar (0 = nunca)
   leaveOnClose: boolean;
   webhookToken: string;
+  /** true (padrão) = cria um grupo por visitante; false = conversa 1:1 direta com a plataforma. */
+  createGroup?: boolean;
+  /** URL pública da imagem de capa do grupo (opcional; ignora se vazia). */
+  groupImage?: string;
 }
 
 /** Evento de tempo real publicado no canal broadcast `chat:<realtimeToken>`. */
@@ -62,5 +68,22 @@ export interface InboundMessage {
   senderJid: string | null;
   text: string | null; // apenas conversation/extendedTextMessage
   timestamp: number;
+  raw: unknown;
+}
+
+/**
+ * Mudança de participantes em um grupo WhatsApp, normalizada a partir do evento
+ * `group-participants.update` da Evolution API. Usada para notificar no chat quando
+ * alguém entra, sai ou é removido/adicionado ao grupo da sessão.
+ */
+export interface GroupParticipantChange {
+  /** JID do grupo (ex.: "120363000000000001@g.us"). */
+  groupJid: string;
+  /** JIDs dos participantes afetados (ex.: ["5511999998888@s.whatsapp.net"]). */
+  participants: string[];
+  /** Ação da Evolution: "add" | "remove" | "leave" | "promote" | "demote". */
+  action: "add" | "remove" | "leave" | "promote" | "demote" | (string & {});
+  /** Quem executou a ação (JID); nulo para "leave" (o próprio participante saiu). */
+  author: string | null;
   raw: unknown;
 }

@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChatEvent } from "../../src/types";
-import { createSupabaseRealtimeHandle, createSupabaseTransport } from "../../src/transports/supabase";
+import { createSupabaseRealtimeHandle, createSupabaseTransport, __resetRealtimeClientCache } from "../../src/transports/supabase";
 
 // vi.hoisted: o stub de createClient precisa existir antes do import do módulo sob teste.
 const { createClientMock } = vi.hoisted(() => ({ createClientMock: vi.fn() }));
@@ -117,6 +117,7 @@ function lastChannel(channels: FakeChannel[]): FakeChannel {
 
 beforeEach(() => {
   createClientMock.mockReset();
+  __resetRealtimeClientCache();
 });
 
 // ---------------------------------------------------------------------------
@@ -191,7 +192,7 @@ describe("createSupabaseRealtimeHandle", () => {
     createClientMock.mockReturnValue(client);
     const handle = createSupabaseRealtimeHandle(SUPABASE_URL, ANON_KEY);
 
-    expect(createClientMock).toHaveBeenCalledWith(SUPABASE_URL, ANON_KEY);
+    expect(createClientMock).toHaveBeenCalledWith(SUPABASE_URL, ANON_KEY, expect.any(Object));
 
     handle.subscribe(TOKEN, vi.fn(), vi.fn());
 
