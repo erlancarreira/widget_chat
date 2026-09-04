@@ -434,6 +434,25 @@ describe("ChatBridge.startChat", () => {
     await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "Oi de novo" });
     expect(createGroup).toHaveBeenCalledTimes(1); // grupo novo, pois o anterior está fechado
   });
+
+  it("reuse com grupo morto no WhatsApp (target_gone) → encerra sessão antiga e cria grupo novo", async () => {
+    const store = createMemoryStore();
+    const { bridge, createGroup, sendText } = setup({ store });
+    const prior = await seedSession(store, { groupJid: GROUP_JID });
+    // 1ª chamada (reuse) joga 404/group not found; nas seguintes (novo grupo) sucesso.
+    let calls = 0;
+    sendText.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) throw new EvolutionApiError(404, "group not found", "sendText");
+      return { waMessageId: SENT_WA_ID };
+    });
+
+    const { session } = await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "Oi de novo" });
+
+    expect(createGroup).toHaveBeenCalledTimes(1); // recriou grupo novo
+    expect(session.id).not.toBe(prior.id); // não reaproveitou a sessão morta
+    expect(store.sessions.find((s) => s.id === prior.id)?.status).toBe("closed"); // antiga encerrada
+  });
 });
 
 // ---------------------------------------------------------------------------

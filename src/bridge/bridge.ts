@@ -150,32 +150,39 @@ export class ChatBridge {
 
     // Reusa a conversa ativa do mesmo visitante (um grupo/thread por cliente) em vez de
     // abrir um grupo novo a cada reabertura — evita a proliferação de grupos no WhatsApp.
+    // Só reaproveita se a sessão estiver ativa; se o grupo sumiu no WhatsApp (visitante
+    // saiu/apagou), encerramos a sessão antiga e deixamos o fluxo abaixo recriar um grupo
+    // novo para o mesmo visitante (auto-recuperação — sem grupo zumbi preso no histórico).
     const existing = await store.getSessionByVisitorPhone(phone);
-    if (existing !== null) {
+    if (existing !== null && existing.status === "active") {
       const firstTarget =
         existing.groupJid === null
           ? toWhatsappJid(normalizePhone(cfg.platformNumber))
           : existing.groupJid;
-      let waMessageId: string;
       try {
-        ({ waMessageId } = await this.deps.client.sendText(
+        const { waMessageId } = await this.deps.client.sendText(
           cfg.instance,
           firstTarget,
           formatFirstMessage(existing.code, name, message),
-        ));
+        );
+        await store.registerSentMessageId(existing.id, waMessageId);
+        const initial = await store.appendMessage({
+          sessionId: existing.id,
+          direction: "visitor",
+          body: message,
+          waMessageId,
+          status: "sent",
+        });
+        return { session: existing, messages: [initial] };
       } catch (error) {
-        await store.markStatus(existing.id, "failed");
-        throw new ChatError("Falha ao enviar a primeira mensagem para o grupo", "send_failed", error);
+        if (isTargetGoneError(error)) {
+          // Grupo apagado/saído: encerra a sessão antiga e recria um grupo novo abaixo.
+          await this.closeSessionCleanup(existing, "send_target_gone");
+        } else {
+          await store.markStatus(existing.id, "failed");
+          throw new ChatError("Falha ao enviar a primeira mensagem para o grupo", "send_failed", error);
+        }
       }
-      await store.registerSentMessageId(existing.id, waMessageId);
-      const initial = await store.appendMessage({
-        sessionId: existing.id,
-        direction: "visitor",
-        body: message,
-        waMessageId,
-        status: "sent",
-      });
-      return { session: existing, messages: [initial] };
     }
 
     const code = generateSessionCode();
