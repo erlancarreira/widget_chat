@@ -26,6 +26,19 @@ export const TYPING_PRE_MESSAGE_MIN_MS = 700;
 export const TYPING_PRE_MESSAGE_MAX_MS = 2200;
 /** Mínimo de dígitos (com DDD) para um WhatsApp ser aceito no form. */
 export const MIN_PHONE_DIGITS = 10;
+/** Tempo máximo de espera pela resposta do servidor — o widget nunca fica "enviando" preso. */
+export const REQUEST_TIMEOUT_MS = 20_000;
+
+/** fetch + timeout: aborta em REQUEST_TIMEOUT_MS (chamadores tratam abort como sendError). */
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export type ChatPhase = "idle" | "form" | "chat";
 
@@ -336,7 +349,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
     const { token, messages } = stateRef.current;
     if (token === null) return;
     try {
-      const res = await fetch(historyUrl(endpoint, token, lastCursor(messages)), {
+      const res = await fetchWithTimeout(historyUrl(endpoint, token, lastCursor(messages)), {
         method: "GET",
         headers: { accept: "application/json" },
       });
@@ -404,7 +417,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(historyUrl(endpoint, stored.token, null), {
+        const res = await fetchWithTimeout(historyUrl(endpoint, stored.token, null), {
           method: "GET",
           headers: { accept: "application/json" },
         });
@@ -463,7 +476,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
       dispatch({ type: "sending", value: true });
       dispatch({ type: "error", value: null });
       try {
-        const res = await fetch(endpoint, {
+        const res = await fetchWithTimeout(endpoint, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ token, message: body }),
@@ -551,7 +564,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
       dispatch({ type: "sending", value: true });
       dispatch({ type: "error", value: null });
       try {
-        const res = await fetch(endpoint, {
+        const res = await fetchWithTimeout(endpoint, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ name: name.trim(), phone: digits, message: message.trim(), honeypot: "" }),

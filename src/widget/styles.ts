@@ -243,6 +243,16 @@ export const WIDGET_CSS = `/*
 }
 .ecw-send:disabled { opacity: 0.55; cursor: not-allowed; }
 .ecw-send svg { width: 18px; height: 18px; }
+.ecw-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--ecw-accent-ink);
+  border-top-color: transparent;
+  opacity: 0.9;
+  animation: ecw-spin 0.8s linear infinite;
+}
+@keyframes ecw-spin { to { transform: rotate(360deg); } }
 
 /* ── indicador "digitando…" (3 pontinhos) ────────────────────────────────── */
 .ecw-typing {

@@ -353,6 +353,22 @@ describe("fluxo pré-chat", () => {
     await waitFor(() => expect(screen.getByText("Oi")).toBeInTheDocument());
     expect(fetchMock.calls.some((c) => c.method === "POST")).toBe(true);
   });
+
+  it("composer: durante o envio o botão mostra spinner (não fica sem ícone)", async () => {
+    const rt = createFakeRealtime();
+    renderWidget(rt);
+    await submitForm();
+    await waitFor(() => expect(rt.subscribed).toContain(RT_TOKEN));
+
+    // Pendura o POST: sending permanece true e dá tempo de inspecionar o botão.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    fireEvent.change(screen.getByLabelText(/mensagem/i), { target: { value: "teste" } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+
+    const busy = await screen.findByRole("button", { name: /enviando/i });
+    expect(busy.disabled).toBe(true);
+    expect(busy.querySelector(".ecw-spinner")).not.toBeNull();
+  });
 });
 
 // ─── (b) realtime + badge ─────────────────────────────────────────────────────

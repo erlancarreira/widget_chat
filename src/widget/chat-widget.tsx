@@ -359,7 +359,14 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
           disabled={!canCompose}
         />
         <button className="ecw-send" type="submit" disabled={!canCompose || draft.trim() === "" || sending} aria-label={sending ? tr("sending") : tr("send")}>
-          {sending ? <span className="ecw-sr-only">{tr("sending")}</span> : <SendIcon />}
+          {sending ? (
+            <>
+              <span className="ecw-spinner" aria-hidden="true" />
+              <span className="ecw-sr-only">{tr("sending")}</span>
+            </>
+          ) : (
+            <SendIcon />
+          )}
         </button>
       </form>
     </>
