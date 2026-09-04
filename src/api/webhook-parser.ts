@@ -133,7 +133,25 @@ function parseGroupParticipants(data: unknown): ParsedWebhook {
   }
   const participants: string[] = [];
   for (const p of rawParticipants) {
-    if (typeof p === "string" && p.length > 0) participants.push(p);
+    if (typeof p === "string" && p.length > 0) {
+      participants.push(p);
+      continue;
+    }
+    // WhatsApp multidevice (Evolution ≥ 2.3): participante pode vir como objeto
+    // { id: "…@lid", phoneNumber: "…@s.whatsapp.net" }. O `phoneNumber` é o JID
+    // real de telefone — preferível, porque é o que casa com o visitorPhone da
+    // sessão (o `@lid` é opaco e não dá para comparar).
+    if (isRecord(p)) {
+      const phone = p["phoneNumber"];
+      if (typeof phone === "string" && phone.length > 0) {
+        participants.push(phone);
+        continue;
+      }
+      const id = p["id"];
+      if (typeof id === "string" && id.length > 0) {
+        participants.push(id);
+      }
+    }
   }
   if (participants.length === 0) {
     return { kind: "ignored", reason: "group-participants sem participantes válidos" };

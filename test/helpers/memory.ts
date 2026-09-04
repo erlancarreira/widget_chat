@@ -60,7 +60,7 @@ export function createMemoryStore(): MemorySessionStore {
         visitorPhone: input.visitorPhone,
         visitorContact: input.visitorContact ?? null,
         groupJid: input.groupJid,
-        mode: input.mode,
+        mode: input.mode ?? "group",
         status: "active",
         createdAt: isoNow(),
         lastMessageAt: null,

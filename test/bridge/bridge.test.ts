@@ -55,11 +55,12 @@ function mockClient(over: ClientOverrides = {}) {
   const createGroup = vi.fn(
     over.createGroup ?? (async (): Promise<CreateGroupResult> => ({ groupJid: GROUP_JID })),
   );
-  const setGroupPicture = vi.fn(async () => undefined);
+  const setGroupPicture = vi.fn(async (_instance: string, _jid: string, _url: string) => undefined);
   const client: EvolutionClient = {
     sendText,
     createGroup,
     setGroupPicture,
+    sendPresence: vi.fn(async () => undefined),
     leaveGroup: vi.fn(async () => undefined),
     getConnectionState: vi.fn(async () => "open" as const),
     connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
@@ -231,7 +232,7 @@ describe("ChatBridge.startChat", () => {
   });
 
   it("modo direto (createGroup:false): não cria grupo, envia 1:1 p/ plataforma e marca sessão direta", async () => {
-    const { bridge, store, publish, createGroup, sendText } = setup({ cfg: { createGroup: false } });
+    const { bridge, publish, createGroup, sendText } = setup({ cfg: { createGroup: false } });
 
     const result = await bridge.startChat({ name: "João Silva", phone: "(11) 99999-8888", message: "Quero comprar" });
 
@@ -249,8 +250,13 @@ describe("ChatBridge.startChat", () => {
     await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
 
     expect(setGroupPicture).toHaveBeenCalledTimes(1);
-    expect(setGroupPicture.mock.calls[0]?.[1]).toBe(GROUP_JID);
-    expect(setGroupPicture.mock.calls[0]?.[2]).toBe("https://img/x.png");
+    expect(vi.mocked(setGroupPicture).mock.calls[0]).toEqual([INSTANCE, GROUP_JID, "https://img/x.png"]);
+  });
+
+  it("setGroupPicture não chamado sem groupImage (chamadas de tupla tipadas)", async () => {
+    const { bridge, setGroupPicture } = setup();
+    await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
+    expect(setGroupPicture).not.toHaveBeenCalled();
   });
 
   it("registra o waMessageId enviado (dedupe de eco) e persiste contact", async () => {
@@ -720,9 +726,9 @@ describe("ChatBridge.handleWebhook", () => {
     logSpy.mockRestore();
   });
 
-  it("group-participants.update (leave, não-visitor) → append system message + publish único", async () => {
-    const { bridge, store, publish } = setup();
-    const session = await seedSession(store);
+  it("group-participants.update (leave, não-visitor) → append system message + sessão fechada (fail-safe p/ @lid)", async () => {
+    const { bridge, store, publish, client } = setup();
+    await seedSession(store);
 
     const result = await bridge.handleWebhook({
       event: "group-participants.update",
@@ -734,14 +740,34 @@ describe("ChatBridge.handleWebhook", () => {
     });
 
     expect(result).toEqual({ handled: true });
-    expect(store.messages).toHaveLength(1);
     expect(store.messages[0]).toMatchObject({ direction: "system", status: "sent" });
     expect(store.messages[0]?.body).toContain("saíram do grupo");
-    expect(store.sessions[0]?.status).toBe("active"); // não era o visitante → sessão segue ativa
-    // 1 publish: só a mensagem de sistema (sem evento de session porque não fechou).
-    expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish.mock.calls[0]?.[0]).toBe(session.realtimeToken);
-    expect(publish.mock.calls[0]?.[1]).toEqual({ type: "message", message: store.messages[0] });
+    // Grupos de atendimento têm só plataforma + visitante: qualquer saída encerra
+    // a sessão (fail-safe para o formato @lid, onde o telefone não casa com o
+    // visitorPhone) — nunca fica sessão zumbi aceitando envios.
+    expect(store.sessions[0]?.status).toBe("closed");
+    // 2 publishes: mensagem de sistema + evento de session (status closed).
+    expect(publish).toHaveBeenCalledTimes(2);
+    const sessionEvent = publish.mock.calls.find((c) => c[1]?.type === "session");
+    expect(sessionEvent?.[1]).toEqual({ type: "session", status: "closed" });
+    expect(client.leaveGroup).toHaveBeenCalledWith(INSTANCE, GROUP_JID);
+  });
+
+  it("group-participants.update com participantes @lid (formato novo) → sessão fechada", async () => {
+    const { bridge, store } = setup();
+    await seedSession(store);
+
+    const result = await bridge.handleWebhook({
+      event: "group-participants.update",
+      data: {
+        id: GROUP_JID,
+        participants: [{ id: "50349935210504@lid", phoneNumber: "5585999997777@s.whatsapp.net", admin: null }],
+        action: "remove",
+      },
+    });
+
+    expect(result).toEqual({ handled: true });
+    expect(store.sessions[0]?.status).toBe("closed");
   });
 
   it("group-participants: o próprio visitante sai → sessão fechada (visitor_left) + sai do grupo órfão", async () => {

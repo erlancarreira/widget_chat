@@ -1,12 +1,20 @@
 {
   "name": "@erlancarreira/evolution-chat",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "description": "Chat widget + Evolution API bridge (WhatsApp) — reutilizável, hexagonal, SOLID",
   "license": "MIT",
   "type": "module",
   "main": "./api/index.js",
   "types": "./api/index.d.ts",
-  "files": ["api", "bridge", "next", "transports", "widget", "widget-embed", "README.md"],
+  "files": [
+    "api",
+    "bridge",
+    "next",
+    "transports",
+    "widget",
+    "widget-embed",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -19,9 +27,15 @@
     "react-dom": ">=18.0.0"
   },
   "peerDependenciesMeta": {
-    "@supabase/supabase-js": { "optional": true },
-    "react": { "optional": true },
-    "react-dom": { "optional": true }
+    "@supabase/supabase-js": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",

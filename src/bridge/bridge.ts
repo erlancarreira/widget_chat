@@ -411,7 +411,13 @@ export class ChatBridge {
       await this.deps.store.touchSession(session.id, now);
       await this.deps.transport.publish(session.realtimeToken, { type: "message", message });
 
-      if (visitorLeft) {
+      // Grupos de atendimento têm só plataforma + visitante. Com JIDs @lid o
+      // telefone não dá para comparar (o LID não casa com visitorPhone), então a
+      // comparação exata deixa de ser confiável. Fail-safe: qualquer leave/remove
+      // encerra a sessão — no pior caso (saída estranha de terceiro) o visitante
+      // reabre uma nova conversa; nunca fica com sessão zumbi aceitando envios.
+      const left = change.action === "leave" || change.action === "remove";
+      if (left || visitorLeft) {
         await this.closeSessionCleanup(session, "visitor_left");
       }
 

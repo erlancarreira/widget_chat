@@ -228,19 +228,29 @@ interface ChatPanelProps {
   onNewConversation(): void;
 }
 
-function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, ownerTyping, visitorTyping, onTyping, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
+function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, ownerTyping, onTyping, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
   const uid = useId();
   const [draft, setDraft] = useState("");
 
-  // Sinal "visitante digitando": dispara `true` só na TRANSIÇÃO para digitando (não a
-  // cada tecla) e `false` após 2,5s de inatividade, ao enviar ou ao perder o foco —
-  // evita um POST por caractere. `onChange` já cobre keyup, cola e IME (mais robusto
-  // que keyup puro), então sincroniza com a digitação real e não com o evento bruto.
+  // Sinal "visitante digitando" para a OUTRA ponta (painel de atendente): dispara
+  // `true` só na TRANSIÇÃO para digitando (não a cada tecla) e `false` após 2,5s de
+  // inatividade, ao enviar ou ao perder o foco — evita um POST por caractere. `onChange`
+  // já cobre keyup, cola e IME (mais robusto que keyup puro).
   const typingRef = useRef(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Indicador de digitação DO PRÓPRIO visitante: renderizado LOCALMENTE (sem round-trip
+  // de rede) para ser instantâneo/fluido. Grandes apps (WhatsApp, Messenger, Slack) nunca
+  // mostram o "digitando" do próprio usuário com latência — a outra ponta recebe pela rede
+  // (latência cross-dispositivo aceitável), mas o próprio usuário tem feedback imediato.
+  const selfTypingRef = useRef(false);
+  const selfTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selfTyping, setSelfTyping] = useState(false);
+
   useEffect(() => {
     return () => {
       if (typingTimer.current !== null) clearTimeout(typingTimer.current);
+      if (selfTimer.current !== null) clearTimeout(selfTimer.current);
     };
   }, []);
 
@@ -255,19 +265,39 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
     }
   }, [onTyping]);
 
+  const stopSelfTyping = useCallback((): void => {
+    if (selfTimer.current !== null) {
+      clearTimeout(selfTimer.current);
+      selfTimer.current = null;
+    }
+    if (selfTypingRef.current) {
+      selfTypingRef.current = false;
+      setSelfTyping(false);
+    }
+  }, []);
+
   const handleDraftChange = (e: ChangeEvent<HTMLInputElement>): void => {
     setDraft(e.target.value);
     if (!canCompose) return;
+    // sinal para a OUTRA ponta (vai pela rede, com debounce de 2,5s).
     if (!typingRef.current) {
       typingRef.current = true;
       void onTyping(true);
     }
     if (typingTimer.current !== null) clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(stopTypingSignal, 2500);
+    // indicador local do próprio visitante — instantâneo, sem esperar o servidor.
+    if (!selfTypingRef.current) {
+      selfTypingRef.current = true;
+      setSelfTyping(true);
+    }
+    if (selfTimer.current !== null) clearTimeout(selfTimer.current);
+    selfTimer.current = setTimeout(stopSelfTyping, 2500);
   };
 
   const handleDraftBlur = (): void => {
     stopTypingSignal();
+    stopSelfTyping();
   };
 
   const submit = (e: FormEvent): void => {
@@ -275,6 +305,7 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
     const text = draft.trim();
     if (text === "" || !canCompose) return;
     stopTypingSignal();
+    stopSelfTyping();
     setDraft("");
     void onSend(text);
   };
@@ -303,7 +334,7 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
           ),
         )}
         {ownerTyping && canCompose && <TypingIndicator from="owner" label={tr("typing")} />}
-        {visitorTyping && canCompose && <TypingIndicator from="visitor" label={tr("typing")} />}
+        {selfTyping && canCompose && <TypingIndicator from="visitor" label={tr("typing")} />}
       </ul>
       {!canCompose && (
         <div className="ecw-closed">

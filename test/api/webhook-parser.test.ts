@@ -113,6 +113,37 @@ describe("parseWebhookEvent", () => {
     }
   });
 
+  it("group-participants.update com participantes objeto (@lid, WhatsApp novo) → normaliza pelo phoneNumber", () => {
+    const parsed = parseWebhookEvent({
+      event: "group-participants.update",
+      data: {
+        id: "120363431049084020@g.us",
+        participants: [{ id: "50349935210504@lid", phoneNumber: "558588855793@s.whatsapp.net", admin: null }],
+        action: "remove",
+        author: "50349935210504@lid",
+      },
+    });
+    expect(parsed.kind).toBe("group_participants");
+    if (parsed.kind === "group_participants") {
+      expect(parsed.event.participants).toEqual(["558588855793@s.whatsapp.net"]);
+    }
+  });
+
+  it("group-participants.update objeto sem phoneNumber → usa id; misto string+objeto aceito", () => {
+    const parsed = parseWebhookEvent({
+      event: "group-participants.update",
+      data: {
+        id: "g@g.us",
+        participants: [{ id: "50349935210504@lid", admin: null }, "5511000000000@s.whatsapp.net"],
+        action: "leave",
+      },
+    });
+    expect(parsed.kind).toBe("group_participants");
+    if (parsed.kind === "group_participants") {
+      expect(parsed.event.participants).toEqual(["50349935210504@lid", "5511000000000@s.whatsapp.net"]);
+    }
+  });
+
   it("group-participants sem id/participants → ignored (nunca lança)", () => {
     expect(parseWebhookEvent({ event: "group-participants.update", data: {} }).kind).toBe("ignored");
     expect(

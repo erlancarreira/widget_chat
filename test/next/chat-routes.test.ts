@@ -62,6 +62,7 @@ function mockClient(over: ClientOverrides = {}) {
     sendText,
     createGroup,
     setGroupPicture: vi.fn(async () => undefined),
+    sendPresence: vi.fn(async () => undefined),
     leaveGroup: vi.fn(async () => undefined),
     getConnectionState: vi.fn(async () => "open" as const),
     connectQR: vi.fn(async () => ({ qrBase64: null, pairingCode: null })),
