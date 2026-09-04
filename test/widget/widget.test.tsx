@@ -365,9 +365,34 @@ describe("fluxo pré-chat", () => {
     fireEvent.change(screen.getByLabelText(/mensagem/i), { target: { value: "teste" } });
     fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
 
-    const busy = await screen.findByRole("button", { name: /enviando/i });
+    const busy = (await screen.findByRole("button", { name: /enviando/i })) as HTMLButtonElement;
     expect(busy.disabled).toBe(true);
     expect(busy.querySelector(".ecw-spinner")).not.toBeNull();
+  });
+
+  it("handoff: após enviar, os pontinhos continuam ('preparando resposta') até a resposta chegar", async () => {
+    const rt = createFakeRealtime();
+    renderWidget(rt);
+    await submitForm();
+    await waitFor(() => expect(rt.subscribed).toContain(RT_TOKEN));
+    await waitFor(() => expect(screen.getByText("Olá!")).toBeInTheDocument());
+
+    // Envia a segunda mensagem: os pontinhos NÃO cortam com o input vazio…
+    fireEvent.change(screen.getByLabelText(/mensagem/i), { target: { value: "tem desconto?" } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+    await waitFor(() => expect(screen.getByText("tem desconto?")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getAllByRole("status").some((el) => el.classList.contains("ecw-typing"))).toBe(true),
+    );
+
+    // …e param quando a resposta renderiza (realtime → typing simulado → mensagem).
+    act(() => {
+      rt.emit({ type: "message", message: msg("m-reply", "owner", "Claro, 10%!") });
+    });
+    await waitFor(() => expect(screen.getByText("Claro, 10%!")).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() =>
+      expect(screen.queryAllByRole("status").every((el) => !el.classList.contains("ecw-typing"))).toBe(true),
+    );
   });
 });
 

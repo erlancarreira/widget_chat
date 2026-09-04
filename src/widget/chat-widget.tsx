@@ -47,9 +47,29 @@ export interface ChatWidgetProps {
   realtime: RealtimeHandle;
   /** Override pontual de copy por chave i18n. */
   labels?: Partial<Record<string, string>>;
+  /**
+   * Sinal "visitante digitando" para um PAINEL DE ATENDENTE (POST /typing + broadcast).
+   * "agent" (default) mantém o sinal — só faça sentido se ALGUÉM assina o canal;
+   * "off" elimina as requisições (indicador local do visitante continua instantâneo).
+   * Use "off" quando o atendimento humano acontece fora de uma UI web (ex.: WhatsApp).
+   */
+  typing?: "agent" | "off";
 }
 
 const DEFAULT_ACCENT = "#25D366";
+/**
+ * Pausa (ms) que encerra o "digitando…" — usado pelos DOIS indicadores que o visitante
+ * vê (os próprios pontinhos, 100% locais, e o do atendente via realtime): pontinhos
+ * sobrevivem a pausas curtas de pensamento, igual WhatsApp. Debounce também mantém o
+ * sinal de rede econômico: `true` uma vez por rajada, `false` só após o silêncio.
+ */
+const TYPING_IDLE_MS = 4_000;
+/**
+ * Limite (ms) dos pontinhos "preparando resposta" após o envio do visitante: se a
+ * resposta não renderizar até aqui (bot fora, n8n lento), os pontinhos param sozinhos
+ * em vez de girar para sempre. Coberto normalmente pela resposta (realtime ou polling).
+ */
+const BOT_TYPING_MAX_MS = 10_000;
 
 function ChatIcon(): ReactElement {
   return (
@@ -233,9 +253,9 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
   const [draft, setDraft] = useState("");
 
   // Sinal "visitante digitando" para a OUTRA ponta (painel de atendente): dispara
-  // `true` só na TRANSIÇÃO para digitando (não a cada tecla) e `false` após 2,5s de
-  // inatividade, ao enviar ou ao perder o foco — evita um POST por caractere. `onChange`
-  // já cobre keyup, cola e IME (mais robusto que keyup puro).
+  // `true` só na TRANSIÇÃO para digitando (não a cada tecla) e `false` após
+  // TYPING_IDLE_MS de inatividade, ao enviar ou ao perder o foco — no máximo 2 requests
+  // por rajada de digitação. `onChange` já cobre keyup, cola e IME (mais robusto que keyup puro).
   const typingRef = useRef(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -247,12 +267,39 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
   const selfTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selfTyping, setSelfTyping] = useState(false);
 
+  // Pontinhos "preparando resposta" (handoff): da saída da mensagem do visitante até a
+  // resposta renderizar. Sem isso, os pontinhos cortam na hora que o input esvazia e
+  // fica um buraco silencioso até a resposta chegar (o "typing" simulado da dona só
+  // começa QUANDO a mensagem chega pelo canal).
+  const [botTyping, setBotTyping] = useState(false);
+  const botTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastMessage = messages[messages.length - 1];
+
   useEffect(() => {
     return () => {
       if (typingTimer.current !== null) clearTimeout(typingTimer.current);
       if (selfTimer.current !== null) clearTimeout(selfTimer.current);
+      if (botTypingTimer.current !== null) clearTimeout(botTypingTimer.current);
     };
   }, []);
+
+  // Liga/desliga pela ÚLTIMA mensagem: visitor pending/sent → esperando resposta;
+  // owner/system renderizada → resposta chegou, para. Enquanto o visitante digita a
+  // próxima, os pontinhos dele assumem (mesmo visual, zero corte perceptível).
+  useEffect(() => {
+    if (!canCompose) return;
+    const waiting =
+      lastMessage !== undefined &&
+      lastMessage.direction === "visitor" &&
+      lastMessage.status !== "failed";
+    if (waiting) {
+      setBotTyping(true);
+      if (botTypingTimer.current !== null) clearTimeout(botTypingTimer.current);
+      botTypingTimer.current = setTimeout(() => setBotTyping(false), BOT_TYPING_MAX_MS);
+    } else {
+      setBotTyping(false);
+    }
+  }, [canCompose, lastMessage?.id, lastMessage?.status]);
 
   const stopTypingSignal = useCallback((): void => {
     if (typingTimer.current !== null) {
@@ -285,14 +332,14 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
       void onTyping(true);
     }
     if (typingTimer.current !== null) clearTimeout(typingTimer.current);
-    typingTimer.current = setTimeout(stopTypingSignal, 2500);
+    typingTimer.current = setTimeout(stopTypingSignal, TYPING_IDLE_MS);
     // indicador local do próprio visitante — instantâneo, sem esperar o servidor.
     if (!selfTypingRef.current) {
       selfTypingRef.current = true;
       setSelfTyping(true);
     }
     if (selfTimer.current !== null) clearTimeout(selfTimer.current);
-    selfTimer.current = setTimeout(stopSelfTyping, 2500);
+    selfTimer.current = setTimeout(stopSelfTyping, TYPING_IDLE_MS);
   };
 
   const handleDraftBlur = (): void => {
@@ -334,6 +381,11 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
           ),
         )}
         {ownerTyping && canCompose && <TypingIndicator from="owner" label={tr("typing")} />}
+        {/* Pontinhos "preparando resposta" (handoff pós-envio) — só quando ninguém
+            mais está digitando, pra não duplicar o indicador. */}
+        {botTyping && !ownerTyping && !selfTyping && canCompose && (
+          <TypingIndicator from="owner" label={tr("typing")} />
+        )}
         {selfTyping && canCompose && <TypingIndicator from="visitor" label={tr("typing")} />}
       </ul>
       {!canCompose && (
@@ -374,12 +426,17 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
 }
 
 export function ChatWidget(props: ChatWidgetProps): ReactElement {
-  const { endpoint, locale, welcome, projectName, realtime, labels } = props;
+  const { endpoint, locale, welcome, projectName, realtime, labels, typing } = props;
   const accentColor = props.accentColor ?? DEFAULT_ACCENT;
 
   const tr = useCallback((key: WidgetKey): string => t(locale, key, labels), [locale, labels]);
   const { state, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation, notifyTyping } =
     useChat({ endpoint, realtime });
+
+  // "off" → nenhuma requisição de digitação sai do widget (o indicador LOCAL do
+  // visitante continua instantâneo — é renderizado sem rede no ChatPanel).
+  const noopTyping = useCallback(async (): Promise<void> => {}, []);
+  const reportTyping = typing === "off" ? noopTyping : notifyTyping;
 
   const bubbleRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -461,7 +518,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
               firstFieldRef={firstFieldRef}
               ownerTyping={state.ownerTyping}
               visitorTyping={state.visitorTyping}
-              onTyping={notifyTyping}
+              onTyping={reportTyping}
               onSend={sendMessage}
               onRetry={retryMessage}
               onNewConversation={startNewConversation}

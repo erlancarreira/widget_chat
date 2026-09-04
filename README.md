@@ -193,9 +193,15 @@ em tempo real da sessão (`{ type: "typing", isTyping, from: "owner" | "visitor"
   `from: "owner"` quando quem digita é a **conta da plataforma** (a instância). O widget exibe os
   pontinhos enquanto `isTyping` for `true`; ao enviar a mensagem ou receber `paused`, some.
 - **chat → atendente (visitante digita):** o widget POSTa `{ token, isTyping }` em `${endpoint}/typing`
-  (ex.: `/api/chat/typing`) sempre que o visitante digita/para de digitar (com *debounce* de 2,5 s). O
-  SDK publica `typing` com `from: "visitor"` no mesmo canal, para que uma **interface de atendente** (que
-  assine o canal) exiba o indicador.
+  (ex.: `/api/chat/typing`) quando o visitante começa a digitar e quando para (debounce de 4s — no
+  máximo 2 requests por rajada). O SDK publica `typing` com `from: "visitor"` no mesmo canal, para
+  que uma **interface de atendente** (que assine o canal) exiba o indicador. Sem painel de atendente
+  consumindo o canal (ex.: atendimento 100% bot), passe `typing="off"` no `<ChatWidget>` para zerar
+  essas requisições — o indicador LOCAL do visitante não muda (é renderizado sem rede).
+- **Handoff pós-envio (fluidez):** após o visitante enviar, os pontinhos NÃO cortam com o input
+  vazio — continuam ("preparando resposta") até a resposta renderizar (realtime ou polling), com
+  limite de segurança de 10s. O "digitando" simulado antes de cada resposta da dona continua com
+  duração proporcional ao tamanho da mensagem (700–2200ms).
 
 > **Limitação da presença no WhatsApp:** a Evolution só anuncia a presença da **conta conectada à
 > instância**. Como o atendente desta plataforma opera a própria instância, não é possível fazer o
