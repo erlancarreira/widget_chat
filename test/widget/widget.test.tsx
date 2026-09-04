@@ -246,7 +246,7 @@ describe("i18n", () => {
     const required = [
       "openChat", "close", "name", "phone", "message", "send", "sending",
       "welcomeNotice", "privacyNote", "invalidPhone", "sendError", "retry",
-      "sessionClosed", "newConversation", "poweredBy",
+      "sessionClosed", "newConversation", "poweredBy", "typing",
     ] as const;
     for (const key of required) {
       expect(WIDGET_KEYS).toContain(key);

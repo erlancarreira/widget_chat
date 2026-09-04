@@ -20,7 +20,13 @@ import { generateRealtimeToken, generateSessionCode } from "../api/ids";
 import { normalizePhone, toWhatsappJid } from "../api/phone";
 import { parseWebhookEvent } from "../api/webhook-parser";
 import { type EvolutionClient } from "../api/client";
-import type { ChatConfig, ChatMessage, ChatSession, GroupParticipantChange } from "../types";
+import type {
+  ChatConfig,
+  ChatMessage,
+  ChatSession,
+  GroupParticipantChange,
+  PresenceChange,
+} from "../types";
 import { ConversationRouter } from "./router";
 import { formatFirstMessage, formatFollowup } from "./format";
 import type { Clock, RealtimeTransport, SessionStore } from "./types";
@@ -318,6 +324,9 @@ export class ChatBridge {
       if (parsed.kind === "group_participants") {
         return await this.handleGroupParticipants(parsed.event);
       }
+      if (parsed.kind === "presence") {
+        return await this.handlePresence(parsed.event);
+      }
       if (parsed.kind !== "message") return { handled: false }; // connection.update / ignored
 
       const now = this.clock();
@@ -411,6 +420,75 @@ export class ChatBridge {
       console.error("[evolution-chat] group-participants não processado:", error);
       return { handled: true };
     }
+  }
+
+  /**
+   * Trata `PRESENCE_UPDATE` (Evolution): quando a OUTRA ponta está digitando, publica
+   * um evento de tempo real para o widget exibir os "3 pontinhos". O `from` distingue
+   * quem digita (dona da plataforma vs. visitante) para o widget mostrar só quando a
+   * ponta OPOSTA digita.
+   * NUNCA lança: erros são logados e devolvidos como tratado (200) para a Evolution não
+   * reenviar.
+   */
+  private async handlePresence(event: PresenceChange): Promise<{ handled: boolean }> {
+    try {
+      const cfg = this.getConfig();
+      if (!cfg.enabled) return { handled: false };
+
+      const session =
+        event.groupJid !== null ? await this.deps.store.getSessionByGroupJid(event.groupJid) : null;
+      if (session === null || session.status !== "active") return { handled: false };
+
+      const isTyping = event.presence === "composing" || event.presence === "recording";
+      // Em grupo a presença vem de um participante específico; em direto (1:1) costuma
+      // vir sem `participant` porque a própria conta da plataforma é a conversa.
+      // "owner" = a dona da plataforma (a conta conectada à instância) está digitando.
+      const from: "owner" | "visitor" = this.isPlatformParticipant(event.participantJid, cfg)
+        ? "owner"
+        : "visitor";
+
+      await this.deps.transport.publish(session.realtimeToken, { type: "typing", isTyping, from });
+      return { handled: true };
+    } catch (error) {
+      console.error("[evolution-chat] presence não processado:", error);
+      return { handled: true };
+    }
+  }
+
+  /**
+   * Sinaliza que o visitante está (ou parou de) digitar no widget. Publica um evento
+   * `typing` no canal em tempo real da sessão para que uma eventual INTERFACE DE
+   * ATENDENTE exiba o indicador.
+   *
+   * NOTA sobre WhatsApp: a Evolution só permite anunciar a presença da CONTA CONECTADA
+   * à instância. Como o atendente desta plataforma OPERA a própria instância, enviar
+   * `sendPresence` faria o widget exibir um "digitando" FALSO do atendente (eco do
+   * próprio evento de volta pelo webhook). Por isso, aqui, apenas publicamos no canal
+   * em tempo real — a presença WhatsApp do visitante não é representável por terceiros.
+   */
+  async setVisitorTyping(token: string, isTyping: boolean): Promise<void> {
+    try {
+      const session = await this.deps.store.getSessionByToken(token);
+      if (session === null || session.status !== "active") return; // best-effort
+
+      await this.deps.transport.publish(session.realtimeToken, {
+        type: "typing",
+        isTyping,
+        from: "visitor",
+      });
+    } catch (error) {
+      // Digitando é best-effort: nunca deve quebrar o envio de mensagens.
+      console.warn("[evolution-chat] falha ao publicar presença do visitante (ignorado):", error);
+    }
+  }
+
+  /** Verdadeiro se `jid` é a conta da plataforma (dona da instância). */
+  private isPlatformParticipant(jid: string | null, cfg: ChatConfig): boolean {
+    if (jid === null) return true; // modo direto: a conversa é a própria plataforma
+    const platformJid = toWhatsappJid(normalizePhone(cfg.platformNumber));
+    return (
+      jid === platformJid || jid === cfg.platformNumber || jid === `${cfg.platformNumber}@s.whatsapp.net`
+    );
   }
 
   /**

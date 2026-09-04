@@ -236,6 +236,31 @@
 .ecw-send:disabled { opacity: 0.55; cursor: not-allowed; }
 .ecw-send svg { width: 18px; height: 18px; }
 
+/* ── indicador "digitando…" (3 pontinhos) ────────────────────────────────── */
+.ecw-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border-bottom-left-radius: 4px;
+  background: var(--ecw-surface);
+  border: 1px solid var(--ecw-border);
+}
+.ecw-typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ecw-muted);
+  animation: ecw-typing-bounce 1.2s infinite ease-in-out;
+}
+.ecw-typing-dot:nth-child(2) { animation-delay: 0.18s; }
+.ecw-typing-dot:nth-child(3) { animation-delay: 0.36s; }
+@keyframes ecw-typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
 /* ── sessão encerrada / falha ────────────────────────────────────────────── */
 .ecw-closed { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ecw-border); background: var(--ecw-surface); }
 

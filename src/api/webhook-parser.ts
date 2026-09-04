@@ -3,12 +3,13 @@
 // Contrato: parseWebhookEvent(payload: unknown): ParsedWebhook.
 // NUNCA lança exceção — qualquer payload inesperado/inválido vira { kind: "ignored", reason }.
 
-import type { GroupParticipantChange, InboundMessage } from "../types";
+import type { GroupParticipantChange, InboundMessage, PresenceChange, PresenceState } from "../types";
 
 export type ParsedWebhook =
   | { kind: "message"; event: InboundMessage }
   | { kind: "connection"; state: string }
   | { kind: "group_participants"; event: GroupParticipantChange }
+  | { kind: "presence"; event: PresenceChange }
   | { kind: "ignored"; reason: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,6 +92,10 @@ export function parseWebhookEvent(payload: unknown): ParsedWebhook {
     return parseGroupParticipants(data);
   }
 
+  if (event === "PRESENCE_UPDATE" || event === "presence.update") {
+    return parsePresence(data);
+  }
+
   if (event !== "messages.upsert") {
     return { kind: "ignored", reason: `evento não tratado: ${event}` };
   }
@@ -143,4 +148,50 @@ function parseGroupParticipants(data: unknown): ParsedWebhook {
     kind: "group_participants",
     event: { groupJid, participants, action, author, raw: data },
   };
+}
+
+/**
+ * Normaliza o evento `PRESENCE_UPDATE` da Evolution (indicador "digitando…"):
+ *   { id: "…@g.us", presences: { "5511…@s.whatsapp.net": { presence: "composing" } } }
+ * Variações conhecidas: `presences` como mapa (forma atual) OU `participant`+`presence`
+ * diretos (versões mais antigas), e `presence`/`lastKnownPresence` como campo.
+ * NUNCA lança: qualquer formato estranho vira { kind: "ignored" }.
+ */
+function parsePresence(data: unknown): ParsedWebhook {
+  if (!isRecord(data)) return { kind: "ignored", reason: "presence sem data" };
+
+  const groupJid = typeof data["id"] === "string" && data["id"] ? data["id"] : null;
+
+  let participantJid: string | null = null;
+  let presenceRaw: unknown = null;
+
+  const presences = data["presences"];
+  if (isRecord(presences)) {
+    const entries = Object.entries(presences);
+    const first = entries[0];
+    if (first !== undefined) {
+      const [jid, info] = first;
+      participantJid = jid;
+      presenceRaw = isRecord(info) ? (info["presence"] ?? info["lastKnownPresence"]) : info;
+    }
+  } else {
+    participantJid = typeof data["participant"] === "string" ? data["participant"] : null;
+    presenceRaw = data["presence"] ?? data["lastKnownPresence"];
+  }
+
+  const presence = normalizePresence(presenceRaw);
+  if (presence === null) return { kind: "ignored", reason: "presence sem estado reconhecível" };
+
+  return {
+    kind: "presence",
+    event: { groupJid, participantJid, presence, raw: data },
+  };
+}
+
+function normalizePresence(value: unknown): PresenceState | null {
+  if (value === "composing" || value === "recording") return value;
+  if (value === "paused") return "paused";
+  // Algumas versões usam available/unavailable para "parou de digitar".
+  if (value === "available" || value === "unavailable") return "paused";
+  return null;
 }

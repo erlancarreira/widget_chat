@@ -1,5 +1,6 @@
 // src/api/client.ts — Adapter REST da Evolution API v2 (fetch injetável p/ testes).
 import { ChatError } from "../errors";
+import type { PresenceState } from "../types";
 
 export interface EvolutionFetch { (url: string, init: RequestInit): Promise<Response>; } // ponto de injeção (DI)
 
@@ -8,6 +9,10 @@ export interface CreateGroupResult { groupJid: string; }
 
 export interface EvolutionClient {
   sendText(instance: string, number: string, text: string): Promise<SendTextResult>;
+  /** Envia presença de digitação ("digitando…") para o número/grupo. `presence` =
+   *  "composing" | "recording" (digitando) ou "paused" (parou). Best-effort: a
+   *  presença é anunciada pela CONTA CONECTADA à instância, não por terceiros. */
+  sendPresence(instance: string, number: string, presence: PresenceState): Promise<void>;
   createGroup(instance: string, subject: string, participants: string[], description?: string): Promise<CreateGroupResult>;
   setGroupPicture(instance: string, groupJid: string, image: string): Promise<void>;
   leaveGroup(instance: string, groupJid: string): Promise<void>;
@@ -94,6 +99,15 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
     async sendText(instance, number, text) {
       const res = await requestJson("sendText", "POST", `/message/sendText/${instance}`, { number, text });
       return { waMessageId: requireString(res, "key", "id") };
+    },
+
+    async sendPresence(instance, number, presence) {
+      // Evolution v2: POST /message/sendPresence/{instance} — anuncia a presença da
+      // conta conectada à instância (não de terceiros). A resposta 200 é suficiente.
+      await request("sendPresence", "POST", `/message/sendPresence/${instance}`, {
+        number,
+        presence,
+      });
     },
 
     async createGroup(instance, subject, participants, description) {

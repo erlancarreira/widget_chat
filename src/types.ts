@@ -52,10 +52,17 @@ export interface ChatConfig {
   groupImage?: string;
 }
 
+/** Estado de presença (digitação) normalizado da Evolution. */
+export type PresenceState = "composing" | "paused" | "recording";
+
 /** Evento de tempo real publicado no canal broadcast `chat:<realtimeToken>`. */
 export type ChatEvent =
   | { type: "message"; message: ChatMessage }
-  | { type: "session"; status: ChatSessionStatus };
+  | { type: "session"; status: ChatSessionStatus }
+  /** Indicador de digitação: `from` diz quem está digitando (dona da plataforma
+   *  ou visitante) para o widget exibir os "3 pontinhos" apenas quando a OUTRA
+   *  ponta digita. */
+  | { type: "typing"; isTyping: boolean; from: "owner" | "visitor" };
 
 /**
  * Mensagem de entrada normalizada do webhook da Evolution, independente do
@@ -85,5 +92,23 @@ export interface GroupParticipantChange {
   action: "add" | "remove" | "leave" | "promote" | "demote" | (string & {});
   /** Quem executou a ação (JID); nulo para "leave" (o próprio participante saiu). */
   author: string | null;
+  raw: unknown;
+}
+
+/**
+ * Mudança de presença (digitação) normalizada do evento `PRESENCE_UPDATE` da
+ * Evolution API. Usada para mostrar o indicador "digitando…" no widget quando a
+ * outra ponta (dona da plataforma ou visitante) está compondo mensagem.
+ *
+ * - `groupJid`: JID do grupo (modo grupo) ou nulo (modo direto 1:1, em que o
+ *   próprio número da plataforma é a conversa).
+ * - `participantJid`: quem está digitando (em grupo, o participante específico;
+ *   em direto, costuma vir nulo e tratamos como a dona da plataforma).
+ * - `presence`: "composing"/"recording" = está digitando; "paused" = parou.
+ */
+export interface PresenceChange {
+  groupJid: string | null;
+  participantJid: string | null;
+  presence: PresenceState;
   raw: unknown;
 }

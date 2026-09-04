@@ -42,6 +42,10 @@ export interface ChatState {
   sending: boolean;
   /** Chave i18n do erro visível ("sendError" | "invalidPhone") ou null. */
   error: string | null;
+  /** True enquanto a DONA da plataforma (atendente) digita → "3 pontinhos" no widget. */
+  ownerTyping: boolean;
+  /** True enquanto o VISITANTE (esta ponta) digita — útil para um painel de atendente. */
+  visitorTyping: boolean;
 }
 
 type Action =
@@ -56,7 +60,8 @@ type Action =
   | { type: "mark"; id: string; status: ChatMessage["status"] }
   | { type: "session-status"; status: ChatSessionStatus }
   | { type: "sending"; value: boolean }
-  | { type: "error"; value: string | null };
+  | { type: "error"; value: string | null }
+  | { type: "typing"; from: "owner" | "visitor"; isTyping: boolean };
 
 const initialState: ChatState = {
   phase: "idle",
@@ -67,17 +72,24 @@ const initialState: ChatState = {
   unread: 0,
   sending: false,
   error: null,
+  ownerTyping: false,
+  visitorTyping: false,
 };
 
 function withMessage(state: ChatState, message: ChatMessage): ChatState {
   const index = state.messages.findIndex((m) => m.id === message.id);
+  let messages: ChatMessage[];
   if (index >= 0) {
-    const messages = [...state.messages];
+    messages = [...state.messages];
     messages[index] = message;
-    return { ...state, messages };
+  } else {
+    messages = [...state.messages, message];
   }
   const bump = state.open || message.direction !== "owner" ? 0 : 1;
-  return { ...state, messages: [...state.messages, message], unread: state.unread + bump };
+  const next: ChatState = { ...state, messages, unread: state.unread + bump };
+  // Quando chega uma mensagem da dona, ela parou de "digitar" (limpa os 3 pontinhos).
+  if (message.direction === "owner") next.ownerTyping = false;
+  return next;
 }
 
 export function chatReducer(state: ChatState, action: Action): ChatState {
@@ -144,6 +156,15 @@ export function chatReducer(state: ChatState, action: Action): ChatState {
       return { ...state, sending: action.value };
     case "error":
       return { ...state, error: action.value };
+    case "typing":
+      // Só transiciona se mudar de fato (evita re-render a cada batida de presença).
+      return action.from === "owner"
+        ? state.ownerTyping === action.isTyping
+          ? state
+          : { ...state, ownerTyping: action.isTyping }
+        : state.visitorTyping === action.isTyping
+          ? state
+          : { ...state, visitorTyping: action.isTyping };
   }
 }
 
@@ -249,6 +270,8 @@ function lastCursor(messages: ChatMessage[]): string | null {
 export interface UseChatOptions {
   endpoint: string;
   realtime: RealtimeHandle;
+  /** Rota que recebe o sinal "visitante digitando" (POST { token, isTyping }). Default: `${endpoint}/typing`. */
+  typingEndpoint?: string;
 }
 
 export interface UseChatResult {
@@ -261,6 +284,8 @@ export interface UseChatResult {
   retryMessage(id: string): Promise<void>;
   /** Descarta a sessão encerrada/falha (storage + estado) e volta ao pré-chat form. */
   startNewConversation(): void;
+  /** Avisa o servidor que o visitante está (true) ou parou (false) de digitar. Best-effort. */
+  notifyTyping(isTyping: boolean): Promise<void>;
 }
 
 let tmpSeq = 0;
@@ -277,8 +302,10 @@ function tmpMessage(body: string): ChatMessage {
   };
 }
 
-export function useChat({ endpoint, realtime }: UseChatOptions): UseChatResult {
+export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions): UseChatResult {
   const [state, dispatch] = useReducer(chatReducer, initialState);
+
+  const typingUrl = typingEndpoint ?? `${endpoint.replace(/\/+$/, "")}/typing`;
 
   // Espelho do estado para callbacks estáveis (eventos realtime/poll chegam fora do React).
   const stateRef = useRef(state);
@@ -346,6 +373,8 @@ export function useChat({ endpoint, realtime }: UseChatOptions): UseChatResult {
       dispatch({ type: "append", message: e.message });
     } else if (e.type === "session" && e.status !== undefined) {
       dispatch({ type: "session-status", status: e.status });
+    } else if (e.type === "typing" && e.from !== undefined) {
+      dispatch({ type: "typing", from: e.from, isTyping: e.isTyping });
     }
   }, []);
 
@@ -469,6 +498,25 @@ export function useChat({ endpoint, realtime }: UseChatOptions): UseChatResult {
     dispatch({ type: "reset-form" });
   }, []);
 
+  // Avisa o servidor que o visitante está (ou parou de) digitar. Best-effort: nunca
+  // deve quebrar o fluxo de envio de mensagens — falhas são silenciadas.
+  const notifyTyping = useCallback(
+    async (isTyping: boolean): Promise<void> => {
+      const token = stateRef.current.token;
+      if (token === null) return;
+      try {
+        await fetch(typingUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, isTyping }),
+        });
+      } catch {
+        /* offline/erro: digitação é cosmética, ignora */
+      }
+    },
+    [typingUrl],
+  );
+
   const submitForm = useCallback(
     async ({ name, phone, message, honeypot }: { name: string; phone: string; message: string; honeypot: string }): Promise<void> => {
       // Anti-bot silencioso: honeypot preenchido → nada sai do navegador (o servidor
@@ -519,5 +567,5 @@ export function useChat({ endpoint, realtime }: UseChatOptions): UseChatResult {
     [endpoint],
   );
 
-  return { state, openPanel, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation };
+  return { state, openPanel, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation, notifyTyping };
 }

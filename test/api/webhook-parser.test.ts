@@ -125,4 +125,41 @@ describe("parseWebhookEvent", () => {
       }).kind,
     ).toBe("ignored");
   });
+
+  it("PRESENCE_UPDATE com mapa presences → kind presence com jid/presence", () => {
+    const parsed = parseWebhookEvent({
+      event: "PRESENCE_UPDATE",
+      data: {
+        id: "120363000@g.us",
+        presences: { "5511999998888@s.whatsapp.net": { presence: "composing" } },
+      },
+    });
+    expect(parsed.kind).toBe("presence");
+    if (parsed.kind === "presence") {
+      expect(parsed.event.groupJid).toBe("120363000@g.us");
+      expect(parsed.event.participantJid).toBe("5511999998888@s.whatsapp.net");
+      expect(parsed.event.presence).toBe("composing");
+    }
+  });
+
+  it("PRESENCE_UPDATE com participant+presence diretos (forma legada)", () => {
+    const parsed = parseWebhookEvent({
+      event: "PRESENCE_UPDATE",
+      data: { id: "5511988887777@s.whatsapp.net", participant: "5511988887777@s.whatsapp.net", presence: "paused" },
+    });
+    expect(parsed.kind).toBe("presence");
+    if (parsed.kind === "presence") {
+      expect(parsed.event.participantJid).toBe("5511988887777@s.whatsapp.net");
+      // normalizePresence mapeia paused → paused (e available/unavailable também).
+      expect(parsed.event.presence).toBe("paused");
+    }
+  });
+
+  it("PRESENCE_UPDATE sem estado reconhecível → ignored (nunca lança)", () => {
+    const parsed = parseWebhookEvent({
+      event: "PRESENCE_UPDATE",
+      data: { id: "g@g.us", presences: { "5511000000000@s.whatsapp.net": { presence: "banana" } } },
+    });
+    expect(parsed.kind).toBe("ignored");
+  });
 });

@@ -780,6 +780,82 @@ describe("ChatBridge.handleWebhook", () => {
 });
 
 // ---------------------------------------------------------------------------
+// typing indicator (PRESENCE_UPDATE + setVisitorTyping)
+// ---------------------------------------------------------------------------
+
+describe("ChatBridge typing (presence)", () => {
+  it("PRESENCE_UPDATE da DONA (plataforma) → publica typing owner=true", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store);
+    const result = await bridge.handleWebhook({
+      event: "PRESENCE_UPDATE",
+      data: { id: GROUP_JID, presences: { [PLATFORM_JID]: { presence: "composing" } } },
+    });
+    expect(result).toEqual({ handled: true });
+    const ev = publish.mock.calls.find((c) => c[1]?.type === "typing")?.[1] as
+      | { type: "typing"; isTyping: boolean; from: "owner" | "visitor" }
+      | undefined;
+    expect(ev).toEqual({ type: "typing", isTyping: true, from: "owner" });
+  });
+
+  it("PRESENCE_UPDATE do VISITANTE → publica typing from=visitor (não dona)", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store, { groupJid: GROUP_JID });
+    const result = await bridge.handleWebhook({
+      event: "PRESENCE_UPDATE",
+      data: { id: GROUP_JID, presences: { [VISITOR_JID]: { presence: "composing" } } },
+    });
+    expect(result).toEqual({ handled: true });
+    const ev = publish.mock.calls.find((c) => c[1]?.type === "typing")?.[1] as
+      | { type: "typing"; isTyping: boolean; from: "owner" | "visitor" }
+      | undefined;
+    expect(ev).toEqual({ type: "typing", isTyping: true, from: "visitor" });
+  });
+
+  it("PRESENCE_UPDATE paused → isTyping=false", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store, { groupJid: GROUP_JID });
+    await bridge.handleWebhook({
+      event: "PRESENCE_UPDATE",
+      data: { id: GROUP_JID, presences: { [PLATFORM_JID]: { presence: "paused" } } },
+    });
+    const ev = publish.mock.calls.find((c) => c[1]?.type === "typing")?.[1] as
+      | { type: "typing"; isTyping: boolean; from: "owner" | "visitor" }
+      | undefined;
+    expect(ev).toEqual({ type: "typing", isTyping: false, from: "owner" });
+  });
+
+  it("PRESENCE_UPDATE de grupo desconhecido → handled:false (não é desta plataforma), sem publish", async () => {
+    const { bridge, publish } = setup();
+    const result = await bridge.handleWebhook({
+      event: "PRESENCE_UPDATE",
+      data: { id: "120363unknown@g.us", presences: { [PLATFORM_JID]: { presence: "composing" } } },
+    });
+    expect(result).toEqual({ handled: false });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("setVisitorTyping(true) → publica typing visitor=true no canal da sessão", async () => {
+    const { bridge, store, publish } = setup();
+    await seedSession(store, { realtimeToken: "RT-1" });
+    await bridge.setVisitorTyping("RT-1", true);
+    expect(publish).toHaveBeenCalledWith("RT-1", { type: "typing", isTyping: true, from: "visitor" });
+    await bridge.setVisitorTyping("RT-1", false);
+    expect(publish).toHaveBeenCalledWith("RT-1", { type: "typing", isTyping: false, from: "visitor" });
+  });
+
+  it("setVisitorTyping com token/estado inválido → best-effort, sem publish", async () => {
+    const { bridge, store, publish } = setup();
+    await bridge.setVisitorTyping("desconhecido", true);
+    expect(publish).not.toHaveBeenCalled();
+
+    await seedSession(store, { realtimeToken: "RT-CLOSED", status: "closed" });
+    await bridge.setVisitorTyping("RT-CLOSED", true);
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // history
 // ---------------------------------------------------------------------------
 

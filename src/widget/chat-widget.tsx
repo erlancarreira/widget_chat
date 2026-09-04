@@ -21,6 +21,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ChangeEvent,
   type FormEvent,
   type ReactElement,
   type RefObject,
@@ -83,6 +84,20 @@ function StatusMark({ status }: { status: ChatMessage["status"] }): ReactElement
     <span className={status === "failed" ? "ecw-status ecw-status--failed" : "ecw-status"} aria-hidden="true">
       {glyph}
     </span>
+  );
+}
+
+/** "3 pontinhos" de digitação: bolha com três pontos animados + rótulo acessível. */
+function TypingIndicator({ label }: { label: string }): ReactElement {
+  return (
+    <li className="ecw-item ecw-item--owner" aria-live="polite">
+      <div className="ecw-typing" role="status" aria-label={label}>
+        <span className="ecw-typing-dot" />
+        <span className="ecw-typing-dot" />
+        <span className="ecw-typing-dot" />
+        <span className="ecw-sr-only">{label}</span>
+      </div>
+    </li>
   );
 }
 
@@ -201,19 +216,48 @@ interface ChatPanelProps {
   tr: (k: WidgetKey) => string;
   listRef: RefObject<HTMLUListElement>;
   firstFieldRef: RefObject<HTMLInputElement>;
+  /** True enquanto a dona da plataforma (atendente) digita → mostra os "3 pontinhos". */
+  ownerTyping: boolean;
+  /** Avisa o servidor que o visitante está/parou de digitar. Best-effort. */
+  onTyping(isTyping: boolean): Promise<void>;
   onSend(text: string): Promise<void>;
   onRetry(id: string): Promise<void>;
   onNewConversation(): void;
 }
 
-function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
+function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFieldRef, ownerTyping, onTyping, onSend, onRetry, onNewConversation }: ChatPanelProps): ReactElement {
   const uid = useId();
   const [draft, setDraft] = useState("");
+
+  // Debounce do sinal "visitante digitando": a cada tecla avisa true e agenda um false
+  // para 2,5s de inatividade; ao enviar, cancela o timer e avisa false imediatamente.
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (typingTimer.current !== null) clearTimeout(typingTimer.current);
+    };
+  }, []);
+
+  const handleDraftChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    setDraft(e.target.value);
+    if (!canCompose) return;
+    void onTyping(true);
+    if (typingTimer.current !== null) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => {
+      void onTyping(false);
+      typingTimer.current = null;
+    }, 2500);
+  };
 
   const submit = (e: FormEvent): void => {
     e.preventDefault();
     const text = draft.trim();
     if (text === "" || !canCompose) return;
+    if (typingTimer.current !== null) {
+      clearTimeout(typingTimer.current);
+      typingTimer.current = null;
+    }
+    void onTyping(false);
     setDraft("");
     void onSend(text);
   };
@@ -241,6 +285,7 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
             </li>
           ),
         )}
+        {ownerTyping && canCompose && <TypingIndicator label={tr("typing")} />}
       </ul>
       {!canCompose && (
         <div className="ecw-closed">
@@ -260,7 +305,7 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
           autoComplete="off"
           placeholder={tr("message")}
           value={draft}
-          onChange={(e) => { setDraft(e.target.value); }}
+          onChange={handleDraftChange}
           disabled={!canCompose}
         />
         <button className="ecw-send" type="submit" disabled={!canCompose || draft.trim() === "" || sending} aria-label={sending ? tr("sending") : tr("send")}>
@@ -276,7 +321,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
   const accentColor = props.accentColor ?? DEFAULT_ACCENT;
 
   const tr = useCallback((key: WidgetKey): string => t(locale, key, labels), [locale, labels]);
-  const { state, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation } =
+  const { state, closePanel, togglePanel, submitForm, sendMessage, retryMessage, startNewConversation, notifyTyping } =
     useChat({ endpoint, realtime });
 
   const bubbleRef = useRef<HTMLButtonElement>(null);
@@ -306,11 +351,11 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
     };
   }, [state.open, closePanel]);
 
-  // Auto-scroll para a mensagem mais recente.
+  // Auto-scroll para a mensagem mais recente (ou os "3 pontinhos" de digitação).
   useEffect(() => {
     const list = listRef.current;
     if (list !== null) list.scrollTop = list.scrollHeight;
-  }, [state.messages, state.open]);
+  }, [state.messages, state.ownerTyping, state.open]);
 
   const handleClose = useCallback((): void => {
     closePanel();
@@ -357,6 +402,8 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
               tr={tr}
               listRef={listRef}
               firstFieldRef={firstFieldRef}
+              ownerTyping={state.ownerTyping}
+              onTyping={notifyTyping}
               onSend={sendMessage}
               onRetry={retryMessage}
               onNewConversation={startNewConversation}

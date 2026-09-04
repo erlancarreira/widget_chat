@@ -165,8 +165,32 @@ chega apenas no GET (reabrir o painel ou o polling de fallback).
 - **Mensagens de sistema:** mudanças de participantes viram `direction: "system"` no chat
   (ex.: "Fulano saiu do grupo"). O schema deve aceitar `direction IN ('visitor','owner','system')`.
 - **Webhook:** aponte a Evolution para `/api/chat/webhook?token=<webhookToken>` com os eventos
-  `MESSAGES_UPSERT` **e** `GROUP_PARTICIPANTS_UPDATE`. O webhook exige URL pública (localhost não
-  recebe da Evolution).
+  `MESSAGES_UPSERT`, `GROUP_PARTICIPANTS_UPDATE` **e** `PRESENCE_UPDATE`. O webhook exige URL pública
+  (localhost não recebe da Evolution). O `PRESENCE_UPDATE` alimenta o indicador "digitando…" no widget.
+
+## Indicador de digitação ("3 pontinhos")
+
+O widget mostra os "3 pontinhos" de "digitando…" nos **dois sentidos**, via evento `typing` no canal
+em tempo real da sessão (`{ type: "typing", isTyping, from: "owner" | "visitor" }`):
+
+- **WhatsApp → chat (atendente digita):** a Evolution entrega `PRESENCE_UPDATE` no webhook (por isso o
+  evento precisa estar subscrito). O SDK resolve a sessão pelo `groupJid` e publica `typing` com
+  `from: "owner"` quando quem digita é a **conta da plataforma** (a instância). O widget exibe os
+  pontinhos enquanto `isTyping` for `true`; ao enviar a mensagem ou receber `paused`, some.
+- **chat → atendente (visitante digita):** o widget POSTa `{ token, isTyping }` em `${endpoint}/typing`
+  (ex.: `/api/chat/typing`) sempre que o visitante digita/para de digitar (com *debounce* de 2,5 s). O
+  SDK publica `typing` com `from: "visitor"` no mesmo canal, para que uma **interface de atendente** (que
+  assine o canal) exiba o indicador.
+
+> **Limitação da presença no WhatsApp:** a Evolution só anuncia a presença da **conta conectada à
+> instância**. Como o atendente desta plataforma opera a própria instância, não é possível fazer o
+> WhatsApp do atendente "ver" a digitação do visitante (isso exigiria uma conta WhatsApp do visitante,
+> que o SDK não controla). Por isso o sentido *chat → WhatsApp* é entregue via o canal em tempo real
+> para um painel de atendente; o sentido *WhatsApp → chat* é nativo.
+
+Para expor o sinal "visitante digitando" ao atendente, monte uma rota que chame
+`bridge.setVisitorTyping(token, isTyping)` (já incluso no `ChatBridge`) — o `/api/chat/typing` do LMS é
+um exemplo.
 
 ## Implementando um `SessionStore` próprio
 

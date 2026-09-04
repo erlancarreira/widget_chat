@@ -25,6 +25,7 @@ export const WIDGET_KEYS = [
   "sessionClosed",
   "newConversation",
   "poweredBy",
+  "typing",
 ] as const;
 
 export type WidgetKey = (typeof WIDGET_KEYS)[number];
@@ -48,6 +49,7 @@ export const pt: WidgetDictionary = {
   sessionClosed: "Esta conversa foi encerrada. Abra uma nova para continuar.",
   newConversation: "Iniciar nova conversa",
   poweredBy: "Powered by",
+  typing: "digitando…",
 };
 
 export const en: WidgetDictionary = {
@@ -66,6 +68,7 @@ export const en: WidgetDictionary = {
   sessionClosed: "This conversation was closed. Start a new one to continue.",
   newConversation: "Start a new conversation",
   poweredBy: "Powered by",
+  typing: "typing…",
 };
 
 export const es: WidgetDictionary = {
@@ -84,6 +87,7 @@ export const es: WidgetDictionary = {
   sessionClosed: "Esta conversación fue cerrada. Abre una nueva para continuar.",
   newConversation: "Iniciar nueva conversación",
   poweredBy: "Powered by",
+  typing: "escribiendo…",
 };
 
 export const dictionaries: Record<WidgetLocale, WidgetDictionary> = { pt, en, es };
