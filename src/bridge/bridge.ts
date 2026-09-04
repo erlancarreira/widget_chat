@@ -286,8 +286,8 @@ export class ChatBridge {
         sessionId: session.id,
         direction: "system",
         body:
-          "Não foi possível confirmar este número no WhatsApp — a conversa segue por aqui no site. " +
-          "Se preferir receber por lá, confira o número; nossa equipe também pode combinar outro contato (e-mail/telefone).",
+          "Número não cadastrado no WhatsApp: o atendimento segue por aqui no site, com histórico salvo. " +
+          "Confira o número informado ou deixe um contato alternativo (e-mail/telefone) para retorno.",
         status: "sent",
       });
       await this.deps.transport.publish(session.realtimeToken, { type: "message", message: notice });

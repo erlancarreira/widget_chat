@@ -260,7 +260,7 @@ describe("ChatBridge.startChat", () => {
     // Aviso de canal inalcançável: mensagem de sistema no início do histórico.
     const system = store.messages.filter((m) => m.sessionId === result.session.id && m.direction === "system");
     expect(system).toHaveLength(1);
-    expect(system[0]?.body).toContain("Não foi possível confirmar este número no WhatsApp");
+    expect(system[0]?.body).toContain("Número não cadastrado no WhatsApp");
     expect(result.messages).toHaveLength(2);
     expect(result.messages[1]?.direction).toBe("system");
   });
