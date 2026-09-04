@@ -167,10 +167,18 @@ function parsePresence(data: unknown): ParsedWebhook {
 
   const presences = data["presences"];
   if (isRecord(presences)) {
-    const entries = Object.entries(presences);
-    const first = entries[0];
-    if (first !== undefined) {
-      const [jid, info] = first;
+    // Grupos podem trazer presença de vários participantes de uma vez. Damos
+    // prioridade ao que está `composing`/`recording` (é o que importa pro
+    // indicador de "digitando"); se nenhum estiver compondo, usamos o primeiro.
+    const entries = Object.entries(presences) as [string, unknown][];
+    const composing = entries.find(([, info]) => {
+      if (!isRecord(info)) return false;
+      const state = info["presence"] ?? info["lastKnownPresence"];
+      return state === "composing" || state === "recording";
+    });
+    const selected = composing ?? entries[0];
+    if (selected !== undefined) {
+      const [jid, info] = selected;
       participantJid = jid;
       presenceRaw = isRecord(info) ? (info["presence"] ?? info["lastKnownPresence"]) : info;
     }

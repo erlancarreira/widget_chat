@@ -485,10 +485,11 @@ export class ChatBridge {
   /** Verdadeiro se `jid` é a conta da plataforma (dona da instância). */
   private isPlatformParticipant(jid: string | null, cfg: ChatConfig): boolean {
     if (jid === null) return true; // modo direto: a conversa é a própria plataforma
-    const platformJid = toWhatsappJid(normalizePhone(cfg.platformNumber));
-    return (
-      jid === platformJid || jid === cfg.platformNumber || jid === `${cfg.platformNumber}@s.whatsapp.net`
-    );
+    // Compara só os dígitos do participant contra o número da plataforma
+    // normalizado — resiste a variações de JID (+55..., @s.whatsapp.net, etc).
+    const participant = (jid.split("@")[0] ?? "").replace(/\D/g, "");
+    const platform = normalizePhone(cfg.platformNumber);
+    return participant === platform;
   }
 
   /**
