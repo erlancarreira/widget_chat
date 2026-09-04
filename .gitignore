@@ -10,3 +10,5 @@ coverage/
 *.tgz
 # Agent working artifacts (review packages, etc.) — not part of the package
 .superpowers/
+
+evolution-chat.zip
