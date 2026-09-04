@@ -19,7 +19,7 @@ import { ChatError } from "../errors";
 import { generateRealtimeToken, generateSessionCode } from "../api/ids";
 import { normalizePhone, toWhatsappJid } from "../api/phone";
 import { parseWebhookEvent } from "../api/webhook-parser";
-import { EvolutionApiError, type EvolutionClient } from "../api/client";
+import { type EvolutionClient } from "../api/client";
 import type { ChatConfig, ChatMessage, ChatSession, GroupParticipantChange } from "../types";
 import { ConversationRouter } from "./router";
 import { formatFirstMessage, formatFollowup } from "./format";
