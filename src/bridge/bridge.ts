@@ -195,29 +195,31 @@ export class ChatBridge {
       }
     }
 
-    // Porta de entrada do número: um telefone que não existe no WhatsApp criaria um
-    // grupo onde a plataforma fala sozinha — o site "funciona", a sessão fica ativa e
-    // o visitante nunca recebe nada no WhatsApp. Valida via Evolution (onWhatsApp).
-    // Degradacão: se o CHECADOR falhar (endpoint ausente/erro de rede/shape estranho),
-    // o atendimento segue como antes — a validação nunca pode derrubar o próprio chat.
+    // Padrão de mercado (capture-first): o lead NUNCA é barrado por validação de canal —
+    // a conversa de registro vive no inbox/site, WhatsApp é só o canal de entrega. Checamos
+    // o número (onWhatsApp) apenas para ROTEAR: sem WhatsApp → grupo nasce só com a
+    // plataforma (histórico/IA continuam no site) e um aviso de sistema marca o contato
+    // como "canal inalcançável" para o time retornar por outro meio. Checador indisponível
+    // → segue sem validar: a checagem nunca é ponto único de falha do atendimento.
+    let visitorOnWhatsApp = true;
     try {
       const checks = await this.deps.client.validateWhatsAppNumbers(cfg.instance, [phone]);
-      if (checks[0]?.exists === false) {
-        // Começa com "Telefone" para a rota mapear field:"phone" (422) e o widget destacar.
-        throw new ChatError("Telefone sem WhatsApp: confira o número digitado (com DDD).", "invalid_input");
-      }
+      if (checks[0]?.exists === false) visitorOnWhatsApp = false;
     } catch (error) {
-      if (error instanceof ChatError) throw error;
       console.warn("[evolution-chat] validação de número indisponível (seguindo sem validar):", error);
     }
 
     const code = generateSessionCode();
     const visitorJid = toWhatsappJid(phone);
     const platformJid = toWhatsappJid(normalizePhone(cfg.platformNumber));
-    // visitor == platform (a plataforma se auto-atende) → lista dedupe, uma única chamada.
-    const participants = [...new Set([visitorJid, platformJid])];
-    const subject = `${cfg.projectName} — ${name} (#${code})`;
     const direct = cfg.createGroup === false;
+    // Sem WhatsApp confirmado: NÃO passamos o número do visitante no createGroup — o grupo
+    // nasce determinístico só com a plataforma, em vez de apostar na retratação interna.
+    const participants =
+      direct || !visitorOnWhatsApp
+        ? [platformJid]
+        : [...new Set([visitorJid, platformJid])];
+    const subject = `${cfg.projectName} — ${name} (#${code})`;
 
     let groupJid: string | null = null;
     if (!direct) {
@@ -276,6 +278,21 @@ export class ChatBridge {
       waMessageId,
       status: "sent",
     });
+
+    if (!visitorOnWhatsApp) {
+      // Marca o canal como inalcançável (visível para visitante e equipe no histórico):
+      // a conversa segue pelo site e o time sabe que precisa retornar por outro meio.
+      const notice = await store.appendMessage({
+        sessionId: session.id,
+        direction: "system",
+        body:
+          "Não foi possível confirmar este número no WhatsApp — a conversa segue por aqui no site. " +
+          "Se preferir receber por lá, confira o número; nossa equipe também pode combinar outro contato (e-mail/telefone).",
+        status: "sent",
+      });
+      await this.deps.transport.publish(session.realtimeToken, { type: "message", message: notice });
+      return { session, messages: [initial, notice] };
+    }
 
     return { session, messages: [initial] };
   }

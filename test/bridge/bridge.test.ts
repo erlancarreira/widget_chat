@@ -240,27 +240,32 @@ describe("ChatBridge.startChat", () => {
     expect(store.messages).toEqual(result.messages);
   });
 
-  it("número SEM WhatsApp (exists:false) → invalid_input sem criar grupo/sessão", async () => {
-    const { bridge, store, createGroup, client } = setup({
+  it("número SEM WhatsApp (exists:false) → capture-first: grupo só plataforma, IA/histórico seguem, aviso de sistema", async () => {
+    const { bridge, store, createGroup, sendText } = setup({
       client: {
         validateWhatsAppNumbers: async () => [{ exists: false, jid: null }],
       },
     });
     await seedSession(store); // sessão de OUTRO visitante não interfere
 
-    const error = await captureError(
-      bridge.startChat({ name: "João", phone: "21999998881", message: "quero comprar" }),
-    );
+    const result = await bridge.startChat({ name: "João", phone: "21999998881", message: "quero comprar" });
 
-    expect(error.code).toBe("invalid_input");
-    expect(error.message).toContain("Telefone");
-    expect(createGroup).not.toHaveBeenCalled();
-    expect(client.sendText).not.toHaveBeenCalled();
-    // Nenhuma sessão nova foi persistida (só a seed).
-    expect(store.sessions).toHaveLength(1);
+    // Capture-first: nada é barrado — conversa vive no site/histórico.
+    expect(result.session.status).toBe("active");
+    expect(store.sessions).toHaveLength(2);
+    // Grupo criado deterministamente SÓ com a plataforma (não aposta na retratação).
+    expect(createGroup).toHaveBeenCalledTimes(1);
+    expect(createGroup.mock.calls[0]?.[2]).toEqual([PLATFORM_JID]);
+    expect(sendText).toHaveBeenCalledTimes(1);
+    // Aviso de canal inalcançável: mensagem de sistema no início do histórico.
+    const system = store.messages.filter((m) => m.sessionId === result.session.id && m.direction === "system");
+    expect(system).toHaveLength(1);
+    expect(system[0]?.body).toContain("Não foi possível confirmar este número no WhatsApp");
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1]?.direction).toBe("system");
   });
 
-  it("validador indisponível (endpoint falha) → chat segue normalmente (degradação)", async () => {
+  it("validador indisponível (endpoint falha) → chat segue normalmente (degradação, grupo com visitante)", async () => {
     const { bridge, store, createGroup } = setup({
       client: {
         validateWhatsAppNumbers: async () => {
@@ -275,6 +280,9 @@ describe("ChatBridge.startChat", () => {
 
     expect(result.session.status).toBe("active");
     expect(createGroup).toHaveBeenCalled();
+    // Degradou sem validar → assume que existe: grupo com visitante + plataforma.
+    expect(createGroup.mock.calls[0]?.[2]).toEqual(["5521999997777@s.whatsapp.net", PLATFORM_JID]);
+    expect(store.messages.filter((m) => m.sessionId === result.session.id && m.direction === "system")).toHaveLength(0);
   });
 
   it("modo direto (createGroup:false): não cria grupo, envia 1:1 p/ plataforma e marca sessão direta", async () => {
