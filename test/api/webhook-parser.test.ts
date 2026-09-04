@@ -144,6 +144,41 @@ describe("parseWebhookEvent", () => {
     }
   });
 
+  it("normaliza o nome do evento entre variações da Evolution (MESSAGES_UPSERT, messages-upsert)", () => {
+    const data = { key: { id: "M1", remoteJid: "g@g.us" }, message: { conversation: "oi" } };
+    for (const event of ["MESSAGES_UPSERT", "messages.upsert", "messages-upsert", "Messages.Upsert"]) {
+      const parsed = parseWebhookEvent({ event, data });
+      expect(parsed.kind).toBe("message");
+    }
+    for (const event of ["GROUP-PARTICIPANTS.UPDATE", "GROUP_PARTICIPANTS_UPDATE"]) {
+      const parsed = parseWebhookEvent({
+        event,
+        data: { id: "g@g.us", participants: ["5511000000000@s.whatsapp.net"], action: "leave" },
+      });
+      expect(parsed.kind).toBe("group_participants");
+    }
+    const presence = parseWebhookEvent({
+      event: "presence-update",
+      data: { id: "g@g.us", participant: "5511999998888@s.whatsapp.net", presence: "composing" },
+    });
+    expect(presence.kind).toBe("presence");
+  });
+
+  it("legenda de mídia (imageMessage/videoMessage/documentMessage) conta como texto", () => {
+    const parsed = parseWebhookEvent({
+      event: "messages.upsert",
+      data: {
+        key: { id: "M2", remoteJid: "g@g.us", participant: "5511999998888@s.whatsapp.net" },
+        message: { imageMessage: { caption: "olha isso ", url: "https://x/y.jpg" } },
+      },
+    });
+    expect(parsed.kind).toBe("message");
+    if (parsed.kind === "message") {
+      expect(parsed.event.text).toBe("olha isso");
+      expect(parsed.event.senderJid).toBe("5511999998888@s.whatsapp.net");
+    }
+  });
+
   it("group-participants sem id/participants → ignored (nunca lança)", () => {
     expect(parseWebhookEvent({ event: "group-participants.update", data: {} }).kind).toBe("ignored");
     expect(

@@ -16,7 +16,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Texto só sai de `conversation` ou `extendedTextMessage.text`; string vazia/só espaços → null.
+// Texto só sai de `conversation`, `extendedTextMessage.text` ou legenda de mídia
+// (imagem/vídeo/documento — mensagem com anexo e legenda chega assim); vazio/só espaços → null.
 function textFromMessage(message: unknown): string | null {
   if (!isRecord(message)) return null;
   const conversation = message["conversation"];
@@ -30,6 +31,16 @@ function textFromMessage(message: unknown): string | null {
     if (typeof text === "string") {
       const trimmed = text.trim();
       return trimmed.length > 0 ? trimmed : null;
+    }
+  }
+  for (const mediaKey of ["imageMessage", "videoMessage", "documentMessage"]) {
+    const media = message[mediaKey];
+    if (isRecord(media)) {
+      const caption = media["caption"];
+      if (typeof caption === "string") {
+        const trimmed = caption.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }
     }
   }
   return null;
@@ -77,27 +88,31 @@ function parseMessageItem(item: unknown): ParsedWebhook {
 export function parseWebhookEvent(payload: unknown): ParsedWebhook {
   if (!isRecord(payload)) return { kind: "ignored", reason: "payload não é um objeto" };
 
-  const event = payload["event"];
-  if (typeof event !== "string") return { kind: "ignored", reason: "payload sem campo event" };
+  const rawEvent = payload["event"];
+  if (typeof rawEvent !== "string") return { kind: "ignored", reason: "payload sem campo event" };
+
+  // Entre versões/configs da Evolution o mesmo evento chega como "messages.upsert",
+  // "MESSAGES_UPSERT" ou "messages-upsert". Normaliza (case + separador) para casar sempre.
+  const event = rawEvent.replace(/[._-]/g, "").toLowerCase();
 
   const data = payload["data"];
 
-  if (event === "connection.update") {
+  if (event === "connectionupdate") {
     const state = isRecord(data) ? data["state"] : undefined;
     if (typeof state === "string" && state.length > 0) return { kind: "connection", state };
     return { kind: "ignored", reason: "connection.update sem state" };
   }
 
-  if (event === "group-participants.update") {
+  if (event === "groupparticipantsupdate") {
     return parseGroupParticipants(data);
   }
 
-  if (event === "PRESENCE_UPDATE" || event === "presence.update") {
+  if (event === "presenceupdate") {
     return parsePresence(data);
   }
 
-  if (event !== "messages.upsert") {
-    return { kind: "ignored", reason: `evento não tratado: ${event}` };
+  if (event !== "messagesupsert") {
+    return { kind: "ignored", reason: `evento não tratado: ${rawEvent}` };
   }
 
   // Evolution v2 pode mandar `data` como objeto único ou array de mensagens (queue-flush/bulk).

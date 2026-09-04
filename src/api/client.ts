@@ -56,14 +56,31 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
   const base = cfg.baseUrl.replace(/\/+$/, ""); // normaliza p/ evitar double slash na concatenação
   const headers = { "content-type": "application/json", apikey: cfg.apiKey };
 
+  // 1 retransmissão em falha de TRANSPORTE (DNS/conexão caiu, rede socket abortada):
+  // reinicializar a Evolution/redeploy derruba conexões esporadicamente e o chamador
+  // (startChat) não tem a rede de segurança do webhook (que reenvia em erro). É seguro
+  // retransmitir: o erro aconteceu ANTES de qualquer resposta — o servidor não processou.
+  // Resposta HTTP != 2xx (EvolutionApiError) NÃO se retransmite: é veredito definitivo.
+  const NETWORK_RETRIES = 1;
+
   async function request(operation: string, method: string, path: string, body?: unknown): Promise<Response> {
-    const response = await doFetch(`${base}${path}`, {
-      method,
-      headers,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    if (!response.ok) throw new EvolutionApiError(response.status, await response.text(), operation);
-    return response;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= NETWORK_RETRIES; attempt++) {
+      try {
+        const response = await doFetch(`${base}${path}`, {
+          method,
+          headers,
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        if (!response.ok) throw new EvolutionApiError(response.status, await response.text(), operation);
+        return response;
+      } catch (error) {
+        if (error instanceof EvolutionApiError) throw error;
+        lastError = error;
+      }
+    }
+    // Normaliza: nenhum chamador deve tratar TypeError/SyntaxError cru de rede.
+    throw new EvolutionApiError(0, `falha de rede: ${String(lastError)}`, operation);
   }
 
   // Contrato: toda falha de HTTP/parse/shape é EvolutionApiError (a ponte captura via instanceof).

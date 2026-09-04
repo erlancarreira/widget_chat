@@ -29,6 +29,33 @@ describe("createEvolutionClient", () => {
     await expect(client.sendText("inst", "n", "t")).rejects.toBeInstanceOf(EvolutionApiError);
   });
 
+  it("falha de rede (fetch rejeita) → 1 retransmissão e sucesso", async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue(ok({ key: { id: "MSG-RETRY" } }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    const r = await client.sendText("inst", "n", "t");
+    expect(r.waMessageId).toBe("MSG-RETRY");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("falha de rede persistente → EvolutionApiError status 0 (nunca TypeError cru)", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    await expect(client.sendText("inst", "n", "t")).rejects.toMatchObject({
+      name: "EvolutionApiError",
+      status: 0,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // 1 tentativa + 1 retransmissão, sem mais
+  });
+
+  it("erro HTTP não é retransmitido (resposta definitiva do servidor)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("unauthorized", { status: 401 }));
+    const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });
+    await expect(client.sendText("inst", "n", "t")).rejects.toBeInstanceOf(EvolutionApiError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("connectQR extrai base64/pairingCode", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(ok({ base64: "data:image/png;base64,AAA", pairingCode: "ABCD-1234" }));
     const client = createEvolutionClient({ baseUrl: "https://evo.test", apiKey: "k", fetchImpl });

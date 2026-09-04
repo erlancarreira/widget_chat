@@ -162,6 +162,15 @@ chega apenas no GET (reabrir o painel ou o polling de fallback).
 - **Auto-recuperação de grupo morto:** se a sessão reaproveitada aponta para um grupo que sumiu no
   WhatsApp (visitante apagou/saiu), o envio falha com `target_gone` e o SDK **encerra a sessão
   antiga e cria um grupo novo** para o mesmo visitante — sem grupo zumbi nem histórico travado.
+- **Formato novo de participantes (WhatsApp multidevice, Evolution ≥ 2.3):** o webhook pode entregar
+  participantes como objetos `{ id: "…@lid", phoneNumber: "…@s.whatsapp.net" }` além de strings.
+  O parser normaliza pelo `phoneNumber` (JID real de telefone); com JIDs `@lid` a comparação de
+  telefone não é confiável, então **qualquer `leave`/`remove` no grupo encerra a sessão** (fail-safe:
+  no pior caso o visitante reabre uma conversa nova — nunca fica sessão zumbi aceitando envios).
+- **Falhas transitórias não encerram atendimento:** retransmissão única em falha de rede (conexão
+  caiu antes de qualquer resposta) no client; erros 5xx da Evolution marcam a mensagem como `failed`
+  mas **não** fecham a sessão — só 404/410 (destino definitivamente inexistente) ou texto de grupo
+  morto disparam o encerramento com aviso.
 - **Mensagens de sistema:** mudanças de participantes viram `direction: "system"` no chat
   (ex.: "Fulano saiu do grupo"). O schema deve aceitar `direction IN ('visitor','owner','system')`.
 - **Webhook:** aponte a Evolution para `/api/chat/webhook?token=<webhookToken>` com os eventos

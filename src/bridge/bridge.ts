@@ -96,6 +96,10 @@ function isTargetGoneError(error: unknown): boolean {
   if (error === null || typeof error !== "object") return false;
   const status = (error as { status?: unknown }).status;
   if (status === 404 || status === 410) return true;
+  // 5xx é falha transitória de infraestrutura (redeploy, DNS, instância reiniciando) —
+  // mesmo que o corpo mencione "group": fechar a sessão aqui jogaria atendimento válido
+  // fora por um soluço. Só 404/410 (destino definitivamente inexistente) fecha.
+  if (typeof status === "number" && status >= 500) return false;
   const text = `${String((error as { message?: unknown }).message ?? "")} ${String(
     (error as { body?: unknown }).body ?? "",
   )}`.toLowerCase();

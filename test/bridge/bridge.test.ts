@@ -564,6 +564,27 @@ describe("ChatBridge.sendVisitorMessage", () => {
     expect(store.sessions[0]?.lastMessageAt).toBeNull(); // sessão não foi tocada
   });
 
+  it("erro transitório 5xx na Evolution NÃO fecha a sessão (só 404/410 ou texto de grupo morto)", async () => {
+    const { bridge, store, client } = setup({
+      client: {
+        sendText: async () => {
+          throw new EvolutionApiError(500, "internal server error", "sendText");
+        },
+      },
+    });
+    await seedSession(store);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const error = await captureError(bridge.sendVisitorMessage("RT-1", "oi"));
+
+    expect(error.code).toBe("send_failed");
+    // Sessão permanece ativa: um 5xx é transitório (redeploy/DNS), fechar seria
+    // jogar a conversa fora por um soluço — o visitante só perde ESTA mensagem.
+    expect(store.sessions[0]?.status).toBe("active");
+    expect(client.leaveGroup).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
   it("grupo inexistente (404) → fecha sessão, anexa aviso de sistema, sai do grupo órfão", async () => {
     const { bridge, store, publish, client } = setup({
       client: {
