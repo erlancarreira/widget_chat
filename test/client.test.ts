@@ -98,7 +98,7 @@ describe("createEvolutionClient", () => {
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://evo.test/webhook/set/inst");
     expect(JSON.parse(String(init.body))).toEqual({
-      webhook: { enabled: true, url: "https://site/api/webhooks/whatsapp", events: ["MESSAGES_UPSERT"], webhookByEvents: false, webhookBase64: false },
+      webhook: { enabled: true, url: "https://site/api/webhooks/whatsapp", events: ["MESSAGES_UPSERT"], webhookByEvents: true, webhookBase64: false },
     });
   });
 

@@ -164,8 +164,11 @@ export function createEvolutionClient(cfg: { baseUrl: string; apiKey: string; fe
     },
 
     async setWebhook(instance, url, events) {
+      // webhookByEvents:true → entrega SÓ os eventos listados (explícito e determinístico).
+      // Assim garantimos que PRESENCE_UPDATE chega sem depender do default "todos os eventos"
+      // da instância (que pode não incluir presença).
       await request("setWebhook", "POST", `/webhook/set/${instance}`, {
-        webhook: { enabled: true, url, events, webhookByEvents: false, webhookBase64: false },
+        webhook: { enabled: true, url, events, webhookByEvents: true, webhookBase64: false },
       });
     },
   };
