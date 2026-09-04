@@ -162,6 +162,9 @@ chega apenas no GET (reabrir o painel ou o polling de fallback).
 - **Auto-recuperação de grupo morto:** se a sessão reaproveitada aponta para um grupo que sumiu no
   WhatsApp (visitante apagou/saiu), o envio falha com `target_gone` e o SDK **encerra a sessão
   antiga e cria um grupo novo** para o mesmo visitante — sem grupo zumbi nem histórico travado.
+- **Restauração sem flash de formulário:** com sessão persistida, o painel mostra um **skeleton**
+  de carregamento durante o GET do histórico — nunca o formulário de dados por cima; o form só
+  volta quando a sessão realmente não existe mais (404).
 - **Formato novo de participantes (WhatsApp multidevice, Evolution ≥ 2.3):** o webhook pode entregar
   participantes como objetos `{ id: "…@lid", phoneNumber: "…@s.whatsapp.net" }` além de strings.
   O parser normaliza pelo `phoneNumber` (JID real de telefone); com JIDs `@lid` a comparação de
@@ -202,6 +205,8 @@ em tempo real da sessão (`{ type: "typing", isTyping, from: "owner" | "visitor"
   vazio — continuam ("preparando resposta") até a resposta renderizar (realtime ou polling), com
   limite de segurança de 10s. O "digitando" simulado antes de cada resposta da dona continua com
   duração proporcional ao tamanho da mensagem (700–2200ms).
+- **Regra dos pontinhos locais:** só aparecem enquanto há caracteres no input — apagou tudo,
+  somem na hora (sem "digitando" fantasma).
 
 > **Limitação da presença no WhatsApp:** a Evolution só anuncia a presença da **conta conectada à
 > instância**. Como o atendente desta plataforma opera a própria instância, não é possível fazer o

@@ -246,7 +246,7 @@ describe("i18n", () => {
     const required = [
       "openChat", "close", "name", "phone", "message", "send", "sending",
       "welcomeNotice", "privacyNote", "invalidPhone", "sendError", "retry",
-      "sessionClosed", "newConversation", "poweredBy", "typing",
+      "sessionClosed", "newConversation", "poweredBy", "typing", "loading",
     ] as const;
     for (const key of required) {
       expect(WIDGET_KEYS).toContain(key);
@@ -370,8 +370,47 @@ describe("fluxo pré-chat", () => {
     expect(busy.querySelector(".ecw-spinner")).not.toBeNull();
   });
 
-  it("handoff: após enviar, os pontinhos continuam ('preparando resposta') até a resposta chegar", async () => {
+  it("typing some na hora quando o input fica vazio (sem 'digitando' fantasma)", async () => {
     const rt = createFakeRealtime();
+    renderWidget(rt);
+    await submitForm();
+    await waitFor(() => expect(rt.subscribed).toContain(RT_TOKEN));
+
+    // resposta do bot chega e encerra o handoff: nenhum indicador ativo antes do teste
+    act(() => {
+      rt.emit({ type: "message", message: msg("m-reply", "owner", "Olá, tudo bem?") });
+    });
+    await waitFor(() => expect(screen.getByText("Olá, tudo bem?")).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(document.querySelectorAll(".ecw-typing")).toHaveLength(0));
+
+    const input = screen.getByLabelText(/mensagem/i);
+    // digita → pontinhos locais aparecem
+    fireEvent.change(input, { target: { value: "o" } });
+    expect(document.querySelectorAll(".ecw-typing").length).toBeGreaterThan(0);
+    // apaga tudo → pontinhos somem IMEDIATAMENTE (sem esperar o idle de 4s)
+    fireEvent.change(input, { target: { value: "" } });
+    expect(document.querySelectorAll(".ecw-typing")).toHaveLength(0);
+  });
+
+  it("restauração: enquanto o GET de histórico está em voo mostra skeleton, não o form", async () => {
+    const rt = createFakeRealtime();
+    window.localStorage.setItem("ecw:session", JSON.stringify({ token: RT_TOKEN, code: "A3F2" }));
+    // Resposta pendurada: o estado "restoring" fica true e dá tempo de inspecionar.
+    fetchMock.fn.mockImplementation(
+      () => new Promise(() => {}) as unknown as Promise<Response>,
+    );
+
+    renderWidget(rt);
+    fireEvent.click(screen.getByRole("button", { name: /abrir chat/i }));
+
+    // Skeleton visível; o form de dados NÃO aparece durante a restauração.
+    await waitFor(() => expect(document.querySelector(".ecw-skeleton")).not.toBeNull());
+    expect(screen.queryByLabelText(/nome/i)).toBeNull();
+
+    // (o teste termina aqui; o fetch pendurado é descartado no unmount)
+  });
+
+  it("handoff: após enviar, os pontinhos continuam ('preparando resposta') até a resposta chegar", async () => {    const rt = createFakeRealtime();
     renderWidget(rt);
     await submitForm();
     await waitFor(() => expect(rt.subscribed).toContain(RT_TOKEN));

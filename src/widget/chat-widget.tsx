@@ -122,6 +122,26 @@ function TypingIndicator({ from, label }: { from: "owner" | "visitor"; label: st
   );
 }
 
+/** Skeleton de restauração: mostrado no lugar do pré-chat form enquanto o GET do
+ *  histórico da sessão persistida está em voo — nunca "pedir os dados" de novo por
+ *  causa de uma corrida de carregamento. */
+function RestoringSkeleton({ tr }: { tr: (k: WidgetKey) => string }): ReactElement {
+  return (
+    <div className="ecw-skeleton" role="status" aria-busy="true" aria-label={tr("loading")}>
+      <span className="ecw-sr-only">{tr("loading")}</span>
+      <div className="ecw-skeleton-row">
+        <div className="ecw-skel ecw-skel--owner" />
+      </div>
+      <div className="ecw-skeleton-row">
+        <div className="ecw-skel ecw-skel--visitor" />
+      </div>
+      <div className="ecw-skeleton-row">
+        <div className="ecw-skel ecw-skel--owner ecw-skel--short" />
+      </div>
+    </div>
+  );
+}
+
 interface FormProps {
   welcome: string;
   tr: (k: WidgetKey) => string;
@@ -324,9 +344,17 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
   }, []);
 
   const handleDraftChange = (e: ChangeEvent<HTMLInputElement>): void => {
-    setDraft(e.target.value);
+    const value = e.target.value;
+    setDraft(value);
     if (!canCompose) return;
-    // sinal para a OUTRA ponta (vai pela rede, com debounce de 2,5s).
+    // REGRA: pontinhos só com caracteres no input. Apagou até ficar vazio → somem
+    // NA HORA (local e rede), sem esperar o idle — sem "digitando" fantasma.
+    if (value.trim() === "") {
+      stopTypingSignal();
+      stopSelfTyping();
+      return;
+    }
+    // sinal para a OUTRA ponta (vai pela rede, com debounce/idle de 4s).
     if (!typingRef.current) {
       typingRef.current = true;
       void onTyping(true);
@@ -508,8 +536,7 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
           </header>
 
           {state.phase === "chat" ? (
-            <ChatPanel
-              messages={state.messages}
+            <ChatPanel              messages={state.messages}
               canCompose={canCompose}
               sending={state.sending}
               locale={locale}
@@ -523,6 +550,10 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
               onRetry={retryMessage}
               onNewConversation={startNewConversation}
             />
+          ) : state.restoring ? (
+            // Sessão persistida em restauração: SKELETON em vez do form — sem pedir
+            // os dados de novo por causa do flash de carregamento.
+            <RestoringSkeleton tr={tr} />
           ) : (
             <PreChatForm
               welcome={welcome}

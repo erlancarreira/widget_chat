@@ -279,6 +279,26 @@ export const WIDGET_CSS = `/*
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
+/* ── skeleton de restauração ─────────────────────────────────────────────── */
+.ecw-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 16px 12px; }
+.ecw-skeleton-row { display: flex; }
+.ecw-skeleton-row:last-child { justify-content: flex-end; }
+.ecw-skel {
+  height: 34px;
+  border-radius: 12px;
+  width: 68%;
+  background: linear-gradient(90deg, var(--ecw-border) 25%, var(--ecw-surface) 50%, var(--ecw-border) 75%);
+  background-size: 200% 100%;
+  animation: ecw-shimmer 1.4s infinite ease-in-out;
+}
+.ecw-skel--owner { border-bottom-left-radius: 4px; }
+.ecw-skel--visitor { margin-left: auto; border-bottom-right-radius: 4px; }
+.ecw-skel--short { width: 42%; }
+@keyframes ecw-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* ── sessão encerrada / falha ────────────────────────────────────────────── */
 .ecw-closed { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--ecw-border); background: var(--ecw-surface); }
 

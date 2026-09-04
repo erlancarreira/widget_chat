@@ -62,6 +62,12 @@ export interface ChatState {
   ownerTyping: boolean;
   /** True enquanto o VISITANTE (esta ponta) digita — útil para um painel de atendente. */
   visitorTyping: boolean;
+  /**
+   * True enquanto o GET de restauração (sessão persistida) está em voo no boot.
+   * Enquanto true, o painel mostra SKELETON em vez do pré-chat form — evita o
+   * "flash" do formulário de dados para quem já tinha conversa aberta.
+   */
+  restoring: boolean;
 }
 
 type Action =
@@ -76,6 +82,7 @@ type Action =
   | { type: "mark"; id: string; status: ChatMessage["status"] }
   | { type: "session-status"; status: ChatSessionStatus }
   | { type: "sending"; value: boolean }
+  | { type: "restoring"; value: boolean }
   | { type: "error"; value: string | null }
   | { type: "typing"; from: "owner" | "visitor"; isTyping: boolean };
 
@@ -90,6 +97,7 @@ const initialState: ChatState = {
   error: null,
   ownerTyping: false,
   visitorTyping: false,
+  restoring: false,
 };
 
 function withMessage(state: ChatState, message: ChatMessage): ChatState {
@@ -170,6 +178,8 @@ export function chatReducer(state: ChatState, action: Action): ChatState {
     }
     case "sending":
       return { ...state, sending: action.value };
+    case "restoring":
+      return { ...state, restoring: action.value };
     case "error":
       return { ...state, error: action.value };
     case "typing":
@@ -415,6 +425,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
     const stored = readStoredSession();
     if (stored === null) return;
     let cancelled = false;
+    dispatch({ type: "restoring", value: true });
     void (async () => {
       try {
         const res = await fetchWithTimeout(historyUrl(endpoint, stored.token, null), {
@@ -438,6 +449,8 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
         });
       } catch {
         /* sem rede: mantém o form/idle; o retry fica com o usuário */
+      } finally {
+        if (!cancelled) dispatch({ type: "restoring", value: false });
       }
     })();
     return () => {
