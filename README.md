@@ -1,9 +1,12 @@
 # @erlancarreira/evolution-chat
 
 Widget de chat (React) + bridge para a **Evolution API v2** (WhatsApp): o visitante abre uma
-conversa no site, o SDK cria um grupo no WhatsApp com o número da plataforma, relaya as
-mensagens nos dois sentidos e entrega tudo em tempo real no painel — com polling de 5 s como
-fallback quando o canal cai. Arquitetura hexagonal: o núcleo (`bridge`) só conhece **portas**
+conversa no site e o SDK, por padrão, **cria um grupo no WhatsApp** com o visitante e a
+plataforma — ou, se `createGroup: false`, manda a mensagem **1:1 direto** para o número da
+plataforma. Relaya as mensagens nos dois sentidos e entrega tudo em tempo real no painel, com
+**mensagens de sistema** (entrou/saiu do grupo), encerramento automático e **limpeza de grupos
+órfãos** (a plataforma sai do grupo quando o visitante sai ou o destino some). Polling de 5 s é
+o fallback quando o canal cai. Arquitetura hexagonal: o núcleo (`bridge`) só conhece **portas**
 (`SessionStore`, `RealtimeTransport`, `RealtimeHandle`, `ChatLimiter`) — persistência e
 transporte são injetados; o adapter oficial usa Supabase, mas qualquer banco serve.
 
@@ -19,10 +22,15 @@ transporte são injetados; o adapter oficial usa Supabase, mas qualquer banco se
 ## Instalação
 
 ```bash
-npm install @erlancarreira/evolution-chat   # npm (react + react-dom são peers)
-npm install github:erlancarreira/evolution-chat     # do repositório — rode `npm run build` (a saída não é versionada)
-npm install file:../evolution-chat          # cópia local em desenvolvimento (idem)
+npm install @erlancarreira/evolution-chat          # recomendado: pacote publicado no npm
+# alternativas (exigem build local — rode `npm run build` no repo; a saída não é versionada):
+npm install github:erlancarreira/evolution-chat    # a partir do repositório
+npm install file:../evolution-chat                 # cópia local (cuidado: no Windows vira junction e quebra o build no Vercel)
 ```
+
+> Passo a passo completo de instalação **+ montagem do painel de administração** em outro
+> projeto (Next.js + Supabase), com todas as opções e ações de staff: consulte
+> [`skills/configure-evolution-chat.md`](./skills/configure-evolution-chat.md).
 
 `@supabase/supabase-js` é peer **opcional** (só para os adapters de realtime). No `<script>`
 nada disso se aplica: React, react-dom e supabase-js vão embutidos.
@@ -123,18 +131,42 @@ export async function getChatConfig(): Promise<ChatConfig> {
     apiKey: process.env.EVOLUTION_API_KEY!,              // apikey da instância (NUNCA vai ao cliente)
     welcome: s?.chatWelcome ?? "Como podemos ajudar?",
     closeHours: s?.chatCloseHours ?? 24,                 // inatividade p/ fechar (0 = nunca)
-    leaveOnClose: s?.chatLeaveOnClose ?? true,           // sai do grupo ao encerrar
+    leaveOnClose: s?.chatLeaveOnClose ?? true,           // sai do grupo nos fechamentos automáticos (visitante saiu/destino sumiu)
     webhookToken: process.env.CHAT_WEBHOOK_TOKEN!,       // segredo do webhook
+    createGroup: s?.chatCreateGroup ?? true,             // true = grupo por visitante; false = conversa 1:1 direta com a plataforma
+    groupImage: s?.chatGroupImage ?? "",                 // URL pública da imagem de capa do grupo (vazia = padrão do produto)
   };
 }
 ```
 
-`closeHours`/`leaveOnClose` são consumidos pelo **hospedeiro**: quem fecha (cron, painel do
-atendente) chama `store.markStatus(id, "closed")` e, se `leaveOnClose`,
-`client.leaveGroup(instance, groupJid)`. Para avisar o visitante na hora, publique
-`{ type: "session", status: "closed" }` via `transport.publish` — hoje o SDK publica só
-`{ type: "message" }`; sem esse publish o status chega ao widget apenas no GET (reabrir o
-painel, ou o polling quando o canal cai).
+`leaveOnClose`/`closeHours` regem o **fechamento manual** (painel do atendente ou cron): ao
+encerrar a sessão (`store.markStatus(id, "closed")`) com `leaveOnClose`, o **hospedeiro** decide
+sair do grupo. Já os fechamentos **automáticos** do SDK **não** dependem do host:
+
+- **Visitante sai ou é removido do grupo** (`GROUP_PARTICIPANTS_UPDATE` com `action: leave`/`remove`)
+  → a sessão é fechada e a plataforma **sai do grupo** (`client.leaveGroup`) automaticamente.
+- **O destino some no envio** (Evolution 404/410 ou "group/left/deleted/blocked" no corpo) →
+  `send_target_gone`: sessão fechada com aviso "Conversa encerrada — inicie uma nova" e a
+  plataforma sai do grupo.
+
+Fechamentos manuais **não** saem do grupo (o visitante ficaria sozinho). O widget recebe o status
+via `{ type: "session", status: "closed" }` que o SDK publica no realtime; sem isso, o status
+chega apenas no GET (reabrir o painel ou o polling de fallback).
+
+## Ciclo de vida do grupo, mensagens de sistema e auto-recuperação
+
+- **Modo grupo (padrão) vs 1:1 direto:** `createGroup` controla. No modo grupo, cada visitante
+  ativo ganha seu próprio grupo; no modo direto, a mensagem vai para o número da plataforma.
+- **Reaproveitamento:** `startChat` reusa a **sessão ativa** do mesmo telefone (um grupo/thread
+  por cliente) em vez de abrir grupos novos a cada reabertura.
+- **Auto-recuperação de grupo morto:** se a sessão reaproveitada aponta para um grupo que sumiu no
+  WhatsApp (visitante apagou/saiu), o envio falha com `target_gone` e o SDK **encerra a sessão
+  antiga e cria um grupo novo** para o mesmo visitante — sem grupo zumbi nem histórico travado.
+- **Mensagens de sistema:** mudanças de participantes viram `direction: "system"` no chat
+  (ex.: "Fulano saiu do grupo"). O schema deve aceitar `direction IN ('visitor','owner','system')`.
+- **Webhook:** aponte a Evolution para `/api/chat/webhook?token=<webhookToken>` com os eventos
+  `MESSAGES_UPSERT` **e** `GROUP_PARTICIPANTS_UPDATE`. O webhook exige URL pública (localhost não
+  recebe da Evolution).
 
 ## Implementando um `SessionStore` próprio
 
