@@ -54,6 +54,17 @@ export interface ChatWidgetProps {
    * Use "off" quando o atendimento humano acontece fora de uma UI web (ex.: WhatsApp).
    */
   typing?: "agent" | "off";
+  /**
+   * Exige consentimento LGPD explícito: renderiza um checkbox obrigatório no pré-chat
+   * (desabilita o envio enquanto desmarcado; o servidor registra consentAt = now).
+   * Default: false. O valor marcado viaja no POST e vira evidência persistida.
+   */
+  consentRequired?: boolean;
+  /**
+   * URL da política de privacidade linkada no checkbox (default: "/privacidade" —
+   * página servida pelo site consumidor; abre em nova aba).
+   */
+  consentUrl?: string;
 }
 
 const DEFAULT_ACCENT = "#25D366";
@@ -148,24 +159,30 @@ interface FormProps {
   error: string | null;
   sending: boolean;
   firstFieldRef: RefObject<HTMLInputElement>;
-  onSubmit(values: { name: string; phone: string; message: string; honeypot: string }): Promise<void>;
+  /** Exige o checkbox de consentimento LGPD (default false). */
+  consentRequired: boolean;
+  /** URL da política de privacidade linkada no checkbox (default "/privacidade"). */
+  consentUrl: string;
+  onSubmit(values: { name: string; phone: string; message: string; honeypot: string; consent: boolean }): Promise<void>;
 }
 
-function PreChatForm({ welcome, tr, error, sending, firstFieldRef, onSubmit }: FormProps): ReactElement {
+function PreChatForm({ welcome, tr, error, sending, firstFieldRef, consentRequired, consentUrl, onSubmit }: FormProps): ReactElement {
   const uid = useId();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [message, setMessage] = useState("");
   const [honeypot, setHoneypot] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [consentTouched, setConsentTouched] = useState(false);
   const [phoneTouched, setPhoneTouched] = useState(false);
 
   const phoneValid = isValidPhone(phone);
-  const complete = name.trim() !== "" && phoneValid && message.trim() !== "";
+  const complete = name.trim() !== "" && phoneValid && message.trim() !== "" && (!consentRequired || consent);
 
   const handleSubmit = (e: FormEvent): void => {
     e.preventDefault();
     if (!complete || sending) return;
-    void onSubmit({ name, phone, message, honeypot });
+    void onSubmit({ name, phone, message, honeypot, consent });
   };
 
   return (
@@ -220,6 +237,28 @@ function PreChatForm({ welcome, tr, error, sending, firstFieldRef, onSubmit }: F
           required
         />
       </div>
+
+      {consentRequired && (
+        <div className="ecw-field ecw-consent">
+          <label className="ecw-consent-row" htmlFor={`${uid}-consent`}>
+            <input
+              id={`${uid}-consent`}
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => { setConsentTouched(true); setConsent(e.target.checked); }}
+            />
+            <span className="ecw-consent-text">
+              {tr("consentLabel")}{" "}
+              <a className="ecw-consent-link" href={consentUrl} target="_blank" rel="noopener noreferrer">
+                {tr("privacyPolicy")}
+              </a>
+            </span>
+          </label>
+          {consentTouched && !consent && (
+            <p className="ecw-error" role="alert">{tr("consentRequired")}</p>
+          )}
+        </div>
+      )}
 
       {/* Honeypot anti-bot: invisível para humanos (display:none via .ecw-hp),
           fora da ordem de tabulação e escondido do leitor de tela. */}
@@ -454,7 +493,7 @@ function ChatPanel({ messages, canCompose, sending, locale, tr, listRef, firstFi
 }
 
 export function ChatWidget(props: ChatWidgetProps): ReactElement {
-  const { endpoint, locale, welcome, projectName, realtime, labels, typing } = props;
+  const { endpoint, locale, welcome, projectName, realtime, labels, typing, consentRequired, consentUrl } = props;
   const accentColor = props.accentColor ?? DEFAULT_ACCENT;
 
   const tr = useCallback((key: WidgetKey): string => t(locale, key, labels), [locale, labels]);
@@ -561,6 +600,8 @@ export function ChatWidget(props: ChatWidgetProps): ReactElement {
               error={state.error}
               sending={state.sending}
               firstFieldRef={firstFieldRef}
+              consentRequired={consentRequired ?? false}
+              consentUrl={consentUrl ?? "/privacidade"}
               onSubmit={submitForm}
             />
           )}

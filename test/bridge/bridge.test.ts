@@ -519,6 +519,23 @@ describe("ChatBridge.startChat", () => {
 // sendVisitorMessage (relay site → grupo)
 // ---------------------------------------------------------------------------
 
+// ─── consentimento LGPD ───────────────────────────────────────────────────────
+
+describe("consentimento LGPD (startChat)", () => {
+  it("consent: true → createSession recebe consentAt = agora (evidência do opt-in)", async () => {
+    const { bridge, store } = setup();
+    const { session } = await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi", consent: true });
+    expect(session.consentAt).toBe(NOW_ISO);
+    expect(store.sessions[0]?.consentAt).toBe(NOW_ISO);
+  });
+
+  it("sem consent → consentAt null (sem evidência = sem consentimento)", async () => {
+    const { bridge } = setup();
+    const { session } = await bridge.startChat({ name: "João", phone: VISITOR_PHONE, message: "oi" });
+    expect(session.consentAt ?? null).toBeNull();
+  });
+});
+
 describe("ChatBridge.sendVisitorMessage", () => {
   it("envia ao grupo, promove pending → sent, registra eco e toca a sessão", async () => {
     const { bridge, store, publish, sendText } = setup();

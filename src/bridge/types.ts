@@ -31,6 +31,11 @@ export interface SessionStore {
     ipHash?: string | null;
     /** User-Agent bruto da requisição (auditoria/forense; nunca exibido). */
     userAgent?: string | null;
+    /**
+     * ISO do momento do consentimento LGPD (checkbox do pré-chat); `null`/ausente
+     * quando o cliente não coletou consentimento — a sessão fica sem evidência.
+     */
+    consentAt?: string | null;
   }): Promise<ChatSession>;
   getSessionByToken(token: string): Promise<ChatSession | null>;
   getSessionByGroupJid(jid: string): Promise<ChatSession | null>;

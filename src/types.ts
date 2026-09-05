@@ -29,6 +29,11 @@ export interface ChatSession {
   status: ChatSessionStatus;
   createdAt: string;
   lastMessageAt: string | null;
+  /**
+   * ISO do momento do consentimento LGPD (checkbox do pré-chat). `null`/ausente =
+   * sem evidência (sessões antigas ou cliente sem o checkbox).
+   */
+  consentAt?: string | null;
 }
 
 /**

@@ -22,6 +22,7 @@ import type { MemorySessionStore } from "../helpers/memory";
 import { createMemoryStore } from "../helpers/memory";
 
 const NOW = new Date("2025-03-01T10:00:00.000Z");
+const NOW_ISO = NOW.toISOString();
 
 const VISITOR_PHONE = "5511999998888";
 const PLATFORM_JID = "5511988887777@s.whatsapp.net";
@@ -281,6 +282,23 @@ describe("POST /api/chat sem token (abrir chat)", () => {
 // ---------------------------------------------------------------------------
 // POST /api/chat — mensagem (com token)
 // ---------------------------------------------------------------------------
+
+describe("consentimento LGPD no start", () => {
+  it("consent: true no body → sessão persistida com consentAt = agora", async () => {
+    const { store, routes } = setup();
+    const res = await routes.POST(postJson("/api/chat", { ...VALID_START, consent: true }));
+    expect(res.status).toBe(200);
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0]?.consentAt).toBe(NOW_ISO);
+  });
+
+  it("sem consent no body → sessão criada sem evidência (consentAt null)", async () => {
+    const { store, routes } = setup();
+    const res = await routes.POST(postJson("/api/chat", VALID_START));
+    expect(res.status).toBe(200);
+    expect(store.sessions[0]?.consentAt ?? null).toBeNull();
+  });
+});
 
 describe("POST /api/chat com token (mensagem do visitante)", () => {
   it("ok → 200 {message} relayado ao grupo", async () => {

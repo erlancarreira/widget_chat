@@ -64,6 +64,7 @@ export function createMemoryStore(): MemorySessionStore {
         status: "active",
         createdAt: isoNow(),
         lastMessageAt: null,
+        consentAt: input.consentAt ?? null,
       };
       sessions.push(session);
       return session;

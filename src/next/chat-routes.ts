@@ -236,6 +236,7 @@ export function createChatRoutes(deps: ChatRoutesDeps): ChatRoutes {
         ipHash,
         userAgent: req.headers.get("user-agent") ?? null,
         honeypot: typeof body["honeypot"] === "string" ? body["honeypot"] : null,
+        consent: body["consent"] === true,
       });
       return json(200, {
         session: {

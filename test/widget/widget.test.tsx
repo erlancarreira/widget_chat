@@ -247,6 +247,7 @@ describe("i18n", () => {
       "openChat", "close", "name", "phone", "message", "send", "sending",
       "welcomeNotice", "privacyNote", "invalidPhone", "sendError", "retry",
       "sessionClosed", "newConversation", "poweredBy", "typing", "loading",
+      "consentLabel", "consentRequired", "privacyPolicy",
     ] as const;
     for (const key of required) {
       expect(WIDGET_KEYS).toContain(key);
@@ -436,6 +437,67 @@ describe("fluxo pré-chat", () => {
 });
 
 // ─── (b) realtime + badge ─────────────────────────────────────────────────────
+
+// ─── consentimento LGPD ───────────────────────────────────────────────────────
+
+describe("consentimento LGPD", () => {
+  function renderConsentWidget(rt: FakeRealtime) {
+    return render(
+      <ChatWidget
+        endpoint="/api/chat"
+        locale="pt"
+        welcome="Oi! Como podemos ajudar?"
+        projectName="Aulivra"
+        realtime={rt.handle}
+        consentRequired
+      />,
+    );
+  }
+
+  it("consentRequired: checkbox bloqueia envio, mostra aviso e envia consent:true", async () => {
+    const rt = createFakeRealtime();
+    renderConsentWidget(rt);
+
+    fireEvent.click(screen.getByRole("button", { name: /abrir chat/i }));
+    fireEvent.change(screen.getByLabelText(/nome/i), { target: { value: "João" } });
+    // O texto do consentimento menciona "WhatsApp" — getByLabelText(/whatsapp/i)
+    // casaria com dois controles; o campo de telefone é único pelo placeholder.
+    fireEvent.change(screen.getByPlaceholderText("(11) 99999-8888"), { target: { value: "(11) 99999-8888" } });
+    fireEvent.change(screen.getByLabelText(/mensagem/i), { target: { value: "Olá!" } });
+
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    const sendBtn = screen.getByRole("button", { name: /enviar/i }) as HTMLButtonElement;
+    expect(sendBtn.disabled).toBe(true);
+
+    // link da política de privacidade aponta para /privacidade (default)
+    const link = screen.getByRole("link", { name: /política de privacidade/i });
+    expect(link).toHaveAttribute("href", "/privacidade");
+
+    // marca e desmarca → aviso de consentimento exigido aparece
+    fireEvent.click(checkbox);
+    fireEvent.click(checkbox);
+    expect(screen.getByText(/é preciso autorizar/i)).toBeInTheDocument();
+
+    // marca → habilita e envia com a evidência no POST
+    fireEvent.click(checkbox);
+    expect(sendBtn.disabled).toBe(false);
+    fireEvent.click(sendBtn);
+    await waitFor(() => expect(screen.getByText("Olá!")).toBeInTheDocument());
+    const post = fetchMock.calls.find((c) => c.method === "POST");
+    expect(post!.body).toMatchObject({ name: "João", consent: true });
+  });
+
+  it("sem consentRequired: sem checkbox e consent:false no POST", async () => {
+    const rt = createFakeRealtime();
+    renderWidget(rt);
+    await submitForm();
+    await waitFor(() => expect(screen.getByText("Olá!")).toBeInTheDocument());
+    const post = fetchMock.calls.find((c) => c.method === "POST");
+    expect(post!.body).toMatchObject({ consent: false });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+});
 
 describe("tempo real", () => {
   it("(b) mensagem via subscribe com painel fechado → badge +1; abrir limpa o badge", async () => {

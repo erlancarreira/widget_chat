@@ -39,6 +39,11 @@ export interface StartChatInput {
   ipHash?: string | null;
   userAgent?: string | null;
   honeypot?: string | null;
+  /**
+   * Consentimento LGPD explícito do visitante (checkbox do pré-chat). Quando true,
+   * a sessão nasce com consentAt = agora (evidência auditável do opt-in).
+   */
+  consent?: boolean;
 }
 
 export interface ChatBridgeDeps {
@@ -245,6 +250,7 @@ export class ChatBridge {
       mode: direct ? "direct" : "group",
       ipHash: input.ipHash ?? null,
       userAgent: input.userAgent ?? null,
+      consentAt: input.consent === true ? atIso : null,
     });
 
     // Em modo direto a conversa é 1:1 com a plataforma; senão, vai para o grupo.

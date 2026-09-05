@@ -305,7 +305,7 @@ export interface UseChatResult {
   openPanel(): void;
   closePanel(): void;
   togglePanel(): void;
-  submitForm(input: { name: string; phone: string; message: string; honeypot: string }): Promise<void>;
+  submitForm(input: { name: string; phone: string; message: string; honeypot: string; consent: boolean }): Promise<void>;
   sendMessage(text: string): Promise<void>;
   retryMessage(id: string): Promise<void>;
   /** Descarta a sessão encerrada/falha (storage + estado) e volta ao pré-chat form. */
@@ -563,7 +563,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
   );
 
   const submitForm = useCallback(
-    async ({ name, phone, message, honeypot }: { name: string; phone: string; message: string; honeypot: string }): Promise<void> => {
+    async ({ name, phone, message, honeypot, consent }: { name: string; phone: string; message: string; honeypot: string; consent: boolean }): Promise<void> => {
       // Anti-bot silencioso: honeypot preenchido → nada sai do navegador (o servidor
       // também fingiria sucesso; aqui nem há request).
       if (honeypot.trim() !== "") return;
@@ -580,7 +580,7 @@ export function useChat({ endpoint, realtime, typingEndpoint }: UseChatOptions):
         const res = await fetchWithTimeout(endpoint, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), phone: digits, message: message.trim(), honeypot: "" }),
+          body: JSON.stringify({ name: name.trim(), phone: digits, message: message.trim(), honeypot: "", consent }),
         });
         if (!res.ok) {
           dispatch({ type: "mark", id: optimistic.id, status: "failed" });

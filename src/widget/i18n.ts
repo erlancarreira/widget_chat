@@ -27,6 +27,9 @@ export const WIDGET_KEYS = [
   "poweredBy",
   "typing",
   "loading",
+  "consentLabel",
+  "consentRequired",
+  "privacyPolicy",
 ] as const;
 
 export type WidgetKey = (typeof WIDGET_KEYS)[number];
@@ -52,6 +55,9 @@ export const pt: WidgetDictionary = {
   poweredBy: "Powered by",
   typing: "digitando…",
   loading: "Carregando conversa…",
+  consentLabel: "Autorizo o contato pelo WhatsApp para este atendimento (LGPD).",
+  consentRequired: "É preciso autorizar o contato para continuar.",
+  privacyPolicy: "Política de Privacidade",
 };
 
 export const en: WidgetDictionary = {
@@ -72,6 +78,9 @@ export const en: WidgetDictionary = {
   poweredBy: "Powered by",
   typing: "typing…",
   loading: "Loading conversation…",
+  consentLabel: "I authorize contact via WhatsApp for this support session (GDPR).",
+  consentRequired: "Authorization is required to continue.",
+  privacyPolicy: "Privacy Policy",
 };
 
 export const es: WidgetDictionary = {
@@ -92,6 +101,9 @@ export const es: WidgetDictionary = {
   poweredBy: "Powered by",
   typing: "escribiendo…",
   loading: "Cargando conversación…",
+  consentLabel: "Autorizo el contacto por WhatsApp para esta atención (LGPD).",
+  consentRequired: "Es necesario autorizar el contacto para continuar.",
+  privacyPolicy: "Política de Privacidad",
 };
 
 export const dictionaries: Record<WidgetLocale, WidgetDictionary> = { pt, en, es };

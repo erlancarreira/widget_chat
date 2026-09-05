@@ -213,6 +213,12 @@ export const WIDGET_CSS = `/*
 .ecw-input:focus { outline: 2px solid var(--ecw-accent); outline-offset: 1px; }
 .ecw-input[aria-invalid="true"] { border-color: var(--ecw-danger); }
 .ecw-error { margin: 0; font-size: 12px; color: var(--ecw-danger); }
+/* Consentimento LGPD: checkbox + texto na mesma linha, texto quebrando ao lado. */
+.ecw-consent-row { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.ecw-consent-row input[type="checkbox"] { width: 16px; height: 16px; margin: 1px 0 0; flex-shrink: 0; accent-color: var(--ecw-accent); cursor: pointer; }
+.ecw-consent-row:focus-within input[type="checkbox"] { outline: 2px solid var(--ecw-accent); outline-offset: 1px; }
+.ecw-consent-text { font-size: 12px; color: var(--ecw-text); }
+.ecw-consent-link { color: var(--ecw-accent); text-decoration: underline; }
 .ecw-submit {
   padding: 10px 14px;
   border: none;
